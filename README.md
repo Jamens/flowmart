@@ -24,11 +24,17 @@ python backend/scripts/init_db.py
 # 3. 灌入演示数据（流程定义 + 商品 + 各种状态的订单）
 python backend/scripts/seed.py --reset
 
-# 4. 启动服务
+# 4. 启动后端
 cd backend && python -m uvicorn app.main:app --reload
+
+# 5. 启动前端（另开一个终端）
+cd frontend && npm install && npm run dev
 ```
 
-打开 http://127.0.0.1:8000/docs 查看 Swagger 接口文档。
+- Swagger 接口文档：http://127.0.0.1:8000/docs
+- 管理后台：http://127.0.0.1:5173（含订单管理与流程设计器）
+
+前端已通过 Vite proxy 把 `/api` 转发到后端，无需额外配置跨域。
 
 ## 数据库切换
 
@@ -73,6 +79,15 @@ DB_PASSWORD=1234560
 | POST | `/api/v1/workflows/definitions/{id}/publish` | 发布前校验（必须有 start/end、无悬空引用） |
 | GET | `/api/v1/admin/db/tables` | 数据库表浏览（只读） |
 
+### 前端管理后台（`frontend/`）
+
+Vue 3 + Vite 6 + Element Plus，暗色主题。
+
+- **订单管理**：状态筛选、详情抽屉（商品明细 + 流转时间线 + 可执行操作）
+- **流程设计器**：SVG 画布支持拖拽节点、增删节点/流转、编辑条件表达式与优先级、保存与发布
+- 前端不含任何状态判断——可执行按钮完全由引擎的 `available_events` 决定，
+  流程一改按钮自动跟着变，不需要同步修改前端代码
+
 ### 工具脚本
 
 | 脚本 | 用途 |
@@ -96,10 +111,37 @@ start → submit → 待付款 → pay → 待发货 → ship → 已发货 → 
                  已关闭                          └─ reject  → 待发货
 ```
 
+## 目录结构
+
+```
+backend/
+  app/
+    api/        REST 接口（products / orders / workflows / admin_db）
+    core/       配置与数据库连接
+    models/     ORM 模型（ecommerce / workflow）
+    services/   工作流引擎、订单服务
+  scripts/      初始化、种子数据、可视化导出
+  tests/        pytest 用例
+frontend/
+  src/
+    views/      OrdersView（订单管理）、DesignerView（流程设计器）
+    api.js      接口封装
+docs/            表结构与数据可视化页面（由脚本生成）
+```
+
+## 环境注意事项（Windows 踩坑记录）
+
+- **pip 走代理会失败**：本环境设置了 `HTTPS_PROXY`，访问清华源报 `No matching distribution found`，
+  改用官方源即可正常安装。
+- **Vite 默认只监听 IPv6**：在 `vite.config.js` 里显式配置 `host: '127.0.0.1'`，
+  否则 `127.0.0.1:5173` 连不上。
+- **pnpm 会拦截第三方构建脚本**：导致 esbuild 安装不完整、Vite 起不来。
+  本项目改用 npm，原因记录在 `frontend/.npmrc`。
+- **Git Bash 下 `taskkill /F` 参数会被路径转换**：需 `export MSYS_NO_PATHCONV=1`。
+
 ## 待办
 
-- [ ] 前端管理后台（Vue3 + Element Plus）
-- [ ] 可视化流程设计器（拖拽编排）
-- [ ] 用户认证与鉴权
-- [ ] Alembic 迁移脚本（当前用 create_all）
-- [ ] 库存并发控制（高并发下需行锁或乐观锁）
+- [ ] 用户认证与鉴权（当前订单归属固定在 `user_id=1`，仅为演示）
+- [ ] Alembic 迁移脚本（当前用 `create_all`，模型变更后需删表重建）
+- [ ] 库存并发控制（高并发下需要行锁或乐观锁）
+- [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本）
