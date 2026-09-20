@@ -139,7 +139,9 @@ class Order(TimestampMixin, Base):
         Numeric(12, 2), nullable=False, default=Decimal("0.00")
     )
     # 冗余字段：订单列表筛选排序用，由引擎同步
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="", index=True)
+    # 长度必须 >= wf_nodes.key 的长度(64)，否则 MySQL strict 模式会因超长直接写入失败，
+    # 而 SQLite 不校验长度会静默放行 —— 这类差异要提前消灭在数据模型层面
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
     current_node_key: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     workflow_instance_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     # 收货地址快照：地址被改或删除后，订单仍要能正常发货

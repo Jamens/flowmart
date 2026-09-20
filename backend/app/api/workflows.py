@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.workflow import (
     WorkflowDefinition,
+    WorkflowInstance,
     WorkflowNode,
     WorkflowTransition,
 )
@@ -180,6 +181,25 @@ def archive_definition(definition_id: int, db: Session = Depends(get_db)):
     definition = db.get(WorkflowDefinition, definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="流程定义不存在")
+
+    # 归档前必须确认没有在途实例：归档后引擎只查 published 版本，
+    # 正在跑的订单会永久卡在当前节点且无法回退，属于不可逆事故
+    running = (
+        db.execute(
+            select(WorkflowInstance).where(
+                WorkflowInstance.definition_id == definition.id,
+                WorkflowInstance.status == "running",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if running:
+        raise HTTPException(
+            status_code=400,
+            detail=f"该流程仍有 {len(running)} 个进行中的实例，归档后它们将无法继续流转",
+        )
+
     definition.status = "archived"
     db.commit()
     return {"id": definition.id, "status": definition.status}

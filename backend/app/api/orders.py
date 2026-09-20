@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.database import get_db
 from app.models.ecommerce import Order
 from app.services.order_service import OrderService
+from app.services.workflow_engine import WorkflowError
 
 router = APIRouter(prefix="/orders", tags=["订单"])
 
@@ -30,6 +31,14 @@ class OrderCreateIn(BaseModel):
 class ActionIn(BaseModel):
     operator: str = "admin"
     comment: str = ""
+
+
+def _safe(fn, default):
+    """执行可能因缺少流程实例而失败的调用，失败时返回默认值而非抛错。"""
+    try:
+        return fn()
+    except WorkflowError:
+        return default
 
 
 def _serialize(order: Order, svc: OrderService) -> dict:
@@ -56,8 +65,10 @@ def _serialize(order: Order, svc: OrderService) -> dict:
             }
             for i in order.items
         ],
-        "available_events": svc.available_events(order),
-        "timeline": svc.get_timeline(order),
+        # 订单可能尚未绑定流程实例或实例已丢失，此时不应让整个列表接口 500，
+        # 而是降级为空列表，保证其余订单仍可正常展示
+        "available_events": _safe(lambda: svc.available_events(order), []),
+        "timeline": _safe(lambda: svc.get_timeline(order), []),
     }
 
 
@@ -119,6 +130,9 @@ def fire_event(
     try:
         # 事件名直接透传给服务层，新增流程事件无需改动 API 代码
         order = svc.trigger(order.id, event, payload.operator, payload.comment)
-    except Exception as exc:  # noqa: BLE001  引擎的非法流转错误要透传给前端
+    except (WorkflowError, ValueError) as exc:
+        # 非法流转、参数不合法属于调用方问题 -> 400
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # 其余异常不在此捕获：编程错误应表现为 500 并留下堆栈，
+    # 笼统地转成 400 会把 bug 伪装成用户错误，还会泄漏内部异常信息
     return _serialize(order, svc)

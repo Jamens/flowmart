@@ -112,6 +112,27 @@ class WorkflowEngine:
         )
         return instance
 
+    def _pick(self, candidates: list[WorkflowTransition], ctx: dict[str, Any]):
+        """按顺序选出第一条「条件成立」的流转边。
+
+        求值失败的边会被跳过 —— 这与 available_events 的行为保持一致。
+        否则会出现「前端显示可执行、点击却必然报错」的矛盾：
+        UI 跳过了那条坏边给出按钮，而 fire 却在坏边上直接抛异常。
+
+        但如果所有候选边都是因为表达式写错而失败，则统一抛出，
+        避免配置错误被彻底静默吞掉。
+        """
+        errors: list[str] = []
+        for trans in candidates:
+            try:
+                if eval_condition(trans.condition_expr, ctx):
+                    return trans
+            except WorkflowError as exc:
+                errors.append(str(exc))
+        if errors:
+            raise WorkflowError("流转条件求值失败：" + "；".join(errors))
+        return None
+
     def available_events(
         self, instance_id: int, runtime_context: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
@@ -128,7 +149,8 @@ class WorkflowEngine:
                 WorkflowTransition.definition_id == instance.definition_id,
                 WorkflowTransition.from_node_key == instance.current_node_key,
             )
-            .order_by(WorkflowTransition.priority)
+            # 同级 priority 时按 id 兜底，否则路由结果不确定
+            .order_by(WorkflowTransition.priority, WorkflowTransition.id)
         )
         result = []
         for trans in self.db.execute(stmt).scalars().all():
@@ -174,7 +196,7 @@ class WorkflowEngine:
                 WorkflowTransition.from_node_key == instance.current_node_key,
                 WorkflowTransition.event == event,
             )
-            .order_by(WorkflowTransition.priority)
+            .order_by(WorkflowTransition.priority, WorkflowTransition.id)
         )
         candidates = self.db.execute(stmt).scalars().all()
         if not candidates:
@@ -182,11 +204,7 @@ class WorkflowEngine:
                 f"当前节点 `{instance.current_node_key}` 不支持事件 `{event}`"
             )
 
-        chosen: WorkflowTransition | None = None
-        for trans in candidates:
-            if eval_condition(trans.condition_expr, ctx):
-                chosen = trans
-                break
+        chosen = self._pick(candidates, ctx)
         if chosen is None:
             raise WorkflowError(
                 f"事件 `{event}` 在当前上下文下没有满足条件的流转路径"

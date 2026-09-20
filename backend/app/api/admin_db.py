@@ -11,9 +11,21 @@ from pydantic import BaseModel, Field
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 
 router = APIRouter(prefix="/admin/db", tags=["db-admin"])
+
+
+def _q(name: str) -> str:
+    """按方言引用标识符。
+
+    SQLite 用双引号；MySQL 默认 ANSI_QUOTES 关闭时双引号表示字符串字面量，
+    必须用反引号。不区分的话 `FROM "orders"` 在 MySQL 下会被当成常量而报错。
+    """
+    if settings.dialect == "mysql":
+        return f"`{name}`"
+    return f'"{name}"'
 
 # 写操作黑名单：本地工具也不给删库的机会
 _FORBIDDEN = re.compile(
@@ -44,7 +56,7 @@ def list_tables(db: Session = Depends(get_db)):
     result = []
     for name in _tables(insp):
         try:
-            count = db.execute(text(f'SELECT COUNT(*) FROM "{name}"')).scalar()
+            count = db.execute(text(f'SELECT COUNT(*) FROM {_q(name)}')).scalar()
         except Exception:  # noqa: BLE001
             count = -1
         cols = insp.get_columns(name)
@@ -82,7 +94,8 @@ def read_table(name: str, limit: int = 100, db: Session = Depends(get_db)):
         if fk.get("constrained_columns") and fk.get("referred_columns")
     ]
 
-    rows = db.execute(text(f'SELECT * FROM "{tbl}" LIMIT {limit}')).mappings().all()
+    # limit 已按范围钳制且为 int，可安全拼接（SQL 参数不支持 LIMIT 占位符的方言差异）
+    rows = db.execute(text(f'SELECT * FROM {_q(tbl)} LIMIT {limit}')).mappings().all()
     data = [{k: _serial(v) for k, v in row.items()} for row in rows]
     return {"name": tbl, "columns": columns, "foreign_keys": fks, "rows": data, "total_limit": limit}
 
