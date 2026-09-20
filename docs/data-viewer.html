@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>flowmart 数据浏览器</title>
+<style>
+:root{--bg:#0f1419;--panel:#161b22;--panel2:#1c2230;--bd:#2d3542;--tx:#e6edf3;
+--mut:#8b949e;--ac:#58a6ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;--gray:#6e7681}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);
+font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px}
+header{padding:18px 26px;border-bottom:1px solid var(--bd);display:flex;gap:22px;align-items:center;flex-wrap:wrap}
+h1{margin:0;font-size:18px}.kpi{color:var(--mut);font-size:13px}
+.kpi b{color:var(--ac);font-size:15px}
+.tabs{padding:10px 26px;display:flex;gap:8px;border-bottom:1px solid var(--bd)}
+.tab{background:transparent;border:1px solid var(--bd);color:var(--mut);padding:6px 15px;
+border-radius:6px;cursor:pointer;font-size:13px}
+.tab.on{background:var(--ac);color:#0d1117;border-color:var(--ac);font-weight:600}
+main{padding:20px 26px}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--bd);border-radius:8px;overflow:hidden}
+th{background:var(--panel2);text-align:left;padding:9px 12px;font-size:12px;color:var(--mut);font-weight:600}
+td{padding:9px 12px;border-top:1px solid #21262d;font-size:13px}
+tr:hover td{background:#1a2029}
+.b{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11.5px;font-weight:600}
+.s-completed{background:rgba(63,185,80,.18);color:var(--ok)}
+.s-paid,.s-shipped{background:rgba(88,166,255,.18);color:var(--ac)}
+.s-pending_payment{background:rgba(210,153,34,.18);color:var(--warn)}
+.s-refunding{background:rgba(210,153,34,.25);color:#f0883e}
+.s-closed{background:rgba(110,118,129,.2);color:var(--gray)}
+.card{background:var(--panel);border:1px solid var(--bd);border-radius:8px;padding:14px 16px;margin-bottom:12px}
+.card h4{margin:0 0 8px;font-size:14px;display:flex;justify-content:space-between}
+.mut{color:var(--mut);font-size:12px;font-weight:400}
+.tl{list-style:none;margin:8px 0 0;padding:0 0 0 16px;border-left:2px solid var(--bd)}
+.tl li{position:relative;padding:4px 0 4px 12px;font-size:12.5px;color:var(--mut)}
+.tl li:before{content:'';position:absolute;left:-21px;top:11px;width:8px;height:8px;
+border-radius:50%;background:var(--ac)}
+.tl b{color:var(--tx)}
+#flow{background:var(--panel);border:1px solid var(--bd);border-radius:8px;padding:8px;overflow:auto}
+.n{fill:var(--panel2);stroke:var(--bd)}.n.start{fill:#12261a;stroke:var(--ok)}
+.n.end{fill:#2a1a1a;stroke:var(--err)}.n.hot{stroke:var(--ac);stroke-width:2}
+.nt{fill:var(--tx);font-size:12px;font-weight:600}.ns{fill:var(--mut);font-size:10.5px}
+.e{stroke:#3d4552;fill:none;stroke-width:1.4}.el{fill:var(--mut);font-size:9.5px}
+.badge2{fill:var(--ac);font-size:10px;font-weight:700}
+.hint{padding:12px 26px;color:var(--mut);font-size:12px}
+</style></head><body>
+<header><h1>flowmart 数据浏览器</h1>
+<span class="kpi">订单 <b id="k1">0</b> · 流转日志 <b id="k2">0</b> · SKU <b id="k3">0</b></span>
+<span class="kpi">由 export_data_html.py 生成</span></header>
+<div class="tabs"><button class="tab on" data-v="orders">订单</button>
+<button class="tab" data-v="flow">流程图</button>
+<button class="tab" data-v="skus">商品</button></div>
+<main>
+<div id="orders"><table id="ot"></table></div>
+<div id="flow" style="display:none"><svg id="fs"></svg></div>
+<div id="skus" style="display:none"><table id="st"></table></div>
+</main>
+<div class="hint">重新生成：python backend/scripts/export_data_html.py</div>
+<script>
+const D={"nodes": [{"key": "start", "name": "开始", "type": "start", "x": 60, "y": 220}, {"key": "pending_payment", "name": "待付款", "type": "task", "x": 230, "y": 220}, {"key": "paid", "name": "待发货", "type": "task", "x": 400, "y": 220}, {"key": "shipped", "name": "已发货", "type": "task", "x": 570, "y": 220}, {"key": "completed", "name": "已完成", "type": "end", "x": 740, "y": 220}, {"key": "closed", "name": "已关闭", "type": "end", "x": 400, "y": 60}, {"key": "refunding", "name": "退款审核中", "type": "task", "x": 570, "y": 60}], "transitions": [{"from": "start", "to": "pending_payment", "event": "submit", "condition": "", "desc": "用户提交订单"}, {"from": "pending_payment", "to": "paid", "event": "pay", "condition": "", "desc": "支付成功"}, {"from": "pending_payment", "to": "closed", "event": "cancel", "condition": "", "desc": "取消订单"}, {"from": "paid", "to": "shipped", "event": "ship", "condition": "", "desc": "商家发货"}, {"from": "paid", "to": "closed", "event": "refund", "condition": "amount < 1000", "desc": "小额退款自动关闭"}, {"from": "paid", "to": "refunding", "event": "refund", "condition": "amount >= 1000", "desc": "大额退款转人工审核"}, {"from": "refunding", "to": "closed", "event": "approve", "condition": "", "desc": "退款审核通过"}, {"from": "refunding", "to": "paid", "event": "reject", "condition": "", "desc": "退款驳回，回到待发货"}, {"from": "shipped", "to": "completed", "event": "confirm", "condition": "", "desc": "确认收货"}], "load": {"paid": 1, "shipped": 1, "refunding": 1, "pending_payment": 1}, "orders": [{"no": "NO20260921012950217426", "amount": 1899.0, "status": "completed", "user": "张三", "items": [{"name": "AirPods Pro 2", "spec": "USB-C 版", "qty": 1, "price": 1899.0}], "address": "张三 13800000001 广东省深圳市南山区科技园南路 88 号 A 座 1201", "logs": [{"from": "", "to": "start", "event": "start", "operator": "user:1", "comment": "流程启动", "at": "09-20 17:29:50"}, {"from": "start", "to": "pending_payment", "event": "submit", "operator": "user:1", "comment": "用户下单", "at": "09-20 17:29:50"}, {"from": "pending_payment", "to": "paid", "event": "pay", "operator": "system", "comment": "mock 支付成功", "at": "09-20 17:29:51"}, {"from": "paid", "to": "shipped", "event": "ship", "operator": "admin", "comment": "商家发货", "at": "09-20 17:29:51"}, {"from": "shipped", "to": "completed", "event": "confirm", "operator": "user", "comment": "确认收货", "at": "09-20 17:29:51"}]}, {"no": "NO20260921012951C33A95", "amount": 998.0, "status": "paid", "user": "张三", "items": [{"name": "机械键盘 K8", "spec": "茶轴 87 键", "qty": 2, "price": 499.0}], "address": "张三 13800000001 广东省深圳市南山区科技园南路 88 号 A 座 1201", "logs": [{"from": "", "to": "start", "event": "start", "operator": "user:1", "comment": "流程启动", "at": "09-20 17:29:51"}, {"from": "start", "to": "pending_payment", "event": "submit", "operator": "user:1", "comment": "用户下单", "at": "09-20 17:29:51"}, {"from": "pending_payment", "to": "paid", "event": "pay", "operator": "system", "comment": "mock 支付成功", "at": "09-20 17:29:51"}]}, {"no": "NO202609210129519A140E", "amount": 7999.0, "status": "shipped", "user": "李四", "items": [{"name": "iPhone 15 Pro", "spec": "256GB 黑色", "qty": 1, "price": 7999.0}], "address": "张三 13800000001 广东省深圳市南山区科技园南路 88 号 A 座 1201", "logs": [{"from": "", "to": "start", "event": "start", "operator": "user:2", "comment": "流程启动", "at": "09-20 17:29:51"}, {"from": "start", "to": "pending_payment", "event": "submit", "operator": "user:2", "comment": "用户下单", "at": "09-20 17:29:51"}, {"from": "pending_payment", "to": "paid", "event": "pay", "operator": "system", "comment": "mock 支付成功", "at": "09-20 17:29:51"}, {"from": "paid", "to": "shipped", "event": "ship", "operator": "admin", "comment": "商家发货", "at": "09-20 17:29:51"}]}, {"no": "NO20260921012951B0A947", "amount": 3999.0, "status": "closed", "user": "李四", "items": [{"name": "小米 14", "spec": "12+256GB", "qty": 1, "price": 3999.0}], "address": "张三 13800000001 广东省深圳市南山区科技园南路 88 号 A 座 1201", "logs": [{"from": "", "to": "start", "event": "start", "operator": "user:2", "comment": "流程启动", "at": "09-20 17:29:51"}, {"from": "start", "to": "pending_payment", "event": "submit", "operator": "user:2", "comment": "用户下单", "at": "09-20 17:29:51"}, {"from": "pending_payment", "to": "closed", "event": "cancel", "operator": "user", "comment": "取消订单，已归还库存", "at": "09-20 17:29:51"}]}, {"no": "NO20260921012951C27073", "amount": 7999.0, "status": "refunding", "user": "张三", "items": [{"name": "MacBook Air 13", "spec": "M3 8+256", "qty": 1, "price": 7999.0}], "address": "张三 13800000001 广东省深圳市南山区科技园南路 88 号 A 座 1201", "logs": [{"from": "", "to": "start", "event": "start", "operator": "user:1", "comment": "流程启动", "at": "09-20 17:29:51"}, {"from": "start", "to": "pending_payment", "event": "submit", "operator": "user:1", "comment": "用户下单", "at": "09-20 17:29:51"}, {"from": "pending_payment", "to": "paid", "event": "pay", "operator": "system", "comment": "mock 支付成功", "at": "09-20 17:29:51"}, {"from": "paid", "to": "refunding", "event": "refund", "operator": "admin", "comment": "退款，已归还库存", "at": "09-20 17:29:51"}]}, {"no": "NO2026092101295158BFAF", "amount": 499.0, "status": "pending_payment", "user": "张三", "items": [{"name": "机械键盘 K8", "spec": "茶轴 87 键", "qty": 1, "price": 499.0}], "address": "张三 13800000001 广东省深圳市南山区科技园南路 88 号 A 座 1201", "logs": [{"from": "", "to": "start", "event": "start", "operator": "user:1", "comment": "流程启动", "at": "09-20 17:29:51"}, {"from": "start", "to": "pending_payment", "event": "submit", "operator": "user:1", "comment": "用户下单", "at": "09-20 17:29:51"}]}, {"no": "NO2026092101295141C5F6", "amount": 499.0, "status": "closed", "user": "李四", "items": [{"name": "机械键盘 K8", "spec": "茶轴 87 键", "qty": 1, "price": 499.0}], "address": "张三 13800000001 广东省深圳市南山区科技园南路 88 号 A 座 1201", "logs": [{"from": "", "to": "start", "event": "start", "operator": "user:2", "comment": "流程启动", "at": "09-20 17:29:51"}, {"from": "start", "to": "pending_payment", "event": "submit", "operator": "user:2", "comment": "用户下单", "at": "09-20 17:29:51"}, {"from": "pending_payment", "to": "paid", "event": "pay", "operator": "system", "comment": "mock 支付成功", "at": "09-20 17:29:51"}, {"from": "paid", "to": "closed", "event": "refund", "operator": "admin", "comment": "退款，已归还库存", "at": "09-20 17:29:51"}]}], "skus": [{"code": "IP15-256-BLK", "product": "iPhone 15 Pro", "spec": "256GB 黑色", "price": 7999.0, "stock": 99}, {"code": "IP15-512-BLK", "product": "iPhone 15 Pro", "spec": "512GB 黑色", "price": 9999.0, "stock": 60}, {"code": "MBA13-M3-8G", "product": "MacBook Air 13", "spec": "M3 8+256", "price": 7999.0, "stock": 50}, {"code": "APP2-USBC", "product": "AirPods Pro 2", "spec": "USB-C 版", "price": 1899.0, "stock": 199}, {"code": "MI14-256", "product": "小米 14", "spec": "12+256GB", "price": 3999.0, "stock": 120}, {"code": "K8-BROWN", "product": "机械键盘 K8", "spec": "茶轴 87 键", "price": 499.0, "stock": 297}]};
+const NB={'pending_payment':'待付款',paid:'待发货',shipped:'已发货',completed:'已完成',
+closed:'已关闭',refunding:'退款审核中',start:'开始'};
+document.getElementById('k1').textContent=D.orders.length;
+document.getElementById('k2').textContent=D.orders.reduce((s,o)=>s+o.logs.length,0);
+document.getElementById('k3').textContent=D.skus.length;
+let h='<tr><th>订单号</th><th>用户</th><th>金额</th><th>状态</th><th>商品</th><th>流转步骤</th></tr>';
+D.orders.forEach(o=>{h+=`<tr><td class="mut">${o.no}</td><td>${o.user}</td>
+<td>¥${o.amount.toFixed(2)}</td><td><span class="b s-${o.status}">${NB[o.status]||o.status}</span></td>
+<td>${o.items.map(i=>i.name+'×'+i.qty).join('，')}</td><td>${o.logs.length} 步</td></tr>`;});
+document.getElementById('ot').innerHTML=h;
+let s='<tr><th>SKU</th><th>商品</th><th>规格</th><th>价格</th><th>库存</th></tr>';
+D.skus.forEach(k=>{s+=`<tr><td class="mut">${k.code}</td><td>${k.product}</td><td>${k.spec}</td>
+<td>¥${k.price.toFixed(2)}</td><td>${k.stock}</td></tr>`;});
+document.getElementById('st').innerHTML=s;
+/* 流程图：直接用 wf_nodes 的 x/y，与设计器布局一致 */
+const W=140,H=46;let g='',minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+D.nodes.forEach(n=>{minX=Math.min(minX,n.x-W/2);maxX=Math.max(maxX,n.x+W/2);
+minY=Math.min(minY,n.y-H/2);maxY=Math.max(maxY,n.y+H/2);});
+const OX=30-minX,OY=30-minY;
+const pos={};D.nodes.forEach(n=>pos[n.key]={x:n.x+OX,y:n.y+OY,t:n.type});
+D.transitions.forEach(t=>{const a=pos[t.from],b=pos[t.to];if(!a||!b)return;
+let x1,y1,x2,y2,c1,c2;
+if(b.x>a.x){x1=a.x+W/2;y1=a.y;x2=b.x-W/2;y2=b.y;c1=x1+45;c2=x2-45;}
+else{x1=a.x-W/2;y1=a.y;x2=b.x+W/2;y2=b.y;c1=x1-45;c2=x2+45;}
+g+=`<path class="e" d="M${x1},${y1} C${c1},${y1} ${c2},${y2} ${x2},${y2}"/>`;
+const mx=(x1+x2)/2,my=(y1+y2)/2-4;
+g+=`<text class="el" x="${mx}" y="${my}" text-anchor="middle">${t.event}${t.condition?' ('+t.condition+')':''}</text>`;});
+D.nodes.forEach(n=>{const p=pos[n.key];const hot=(D.load[n.key]>0);
+const cls='n'+(n.type==='start'?' start':n.type==='end'?' end':'')+(hot?' hot':'');
+g+=`<g><rect class="${cls}" x="${p.x-W/2}" y="${p.y-H/2}" width="${W}" height="${H}" rx="7"/>
+<text class="nt" x="${p.x}" y="${p.y-2}" text-anchor="middle">${n.name}</text>
+<text class="ns" x="${p.x}" y="${p.y+14}" text-anchor="middle">${n.key}</text>`;
+if(hot)g+=`<circle cx="${p.x+W/2-12}" cy="${p.y-H/2+10}" r="8" fill="#58a6ff"/>
+<text class="badge2" x="${p.x+W/2-12}" y="${p.y-H/2+13.5}" text-anchor="middle" fill="#0d1117">${D.load[n.key]}</text>`;
+g+=`</g>`;});
+const svg=document.getElementById('fs');
+svg.setAttribute('width',maxX-minX+80);svg.setAttribute('height',maxY-minY+90);
+svg.innerHTML=g;
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
+document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+['orders','flow','skus'].forEach(v=>document.getElementById(v).style.display=v===b.dataset.v?'':'none');});
+</script></body></html>
