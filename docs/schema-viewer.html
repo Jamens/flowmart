@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>flowmart 数据库表结构</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #161b22; --panel-2: #1c2230;
+    --border: #2d3542; --text: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --ec: #3fb950; --wf: #d29922; --pk: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
+  header { padding:20px 28px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:19px; font-weight:600; }
+  .stat { color:var(--muted); font-size:13px; }
+  .stat b { color:var(--accent); }
+  input { background:var(--panel-2); border:1px solid var(--border); color:var(--text);
+    padding:8px 12px; border-radius:6px; width:260px; font-size:13px; outline:none; }
+  input:focus { border-color:var(--accent); }
+  .tabs { padding:12px 28px; display:flex; gap:8px; border-bottom:1px solid var(--border); }
+  .tab { background:transparent; border:1px solid var(--border); color:var(--muted);
+    padding:6px 16px; border-radius:6px; cursor:pointer; font-size:13px; }
+  .tab.active { background:var(--accent); color:#0d1117; border-color:var(--accent); font-weight:600; }
+  #erd { padding:24px 28px; overflow-x:auto; }
+  #cards { padding:20px 28px; display:grid; gap:16px;
+    grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--border);
+    border-radius:10px; overflow:hidden; }
+  .card h3 { margin:0; padding:12px 14px; font-size:14px; font-weight:600;
+    border-bottom:1px solid var(--border); display:flex; justify-content:space-between; }
+  .card.ec h3 { border-left:3px solid var(--ec); }
+  .card.wf h3 { border-left:3px solid var(--wf); }
+  .badge { font-size:11px; color:var(--muted); font-weight:400; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  td { padding:5px 14px; border-bottom:1px solid #21262d; }
+  tr:last-child td { border-bottom:none; }
+  .cn { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .ct { color:var(--muted); font-family:ui-monospace,Consolas,monospace; font-size:11.5px; }
+  .pk { background:rgba(248,81,73,.18); color:var(--pk); padding:1px 5px;
+    border-radius:3px; font-size:10px; margin-left:6px; }
+  .fk { background:rgba(88,166,255,.16); color:var(--accent); padding:1px 5px;
+    border-radius:3px; font-size:10px; margin-left:6px; }
+  .node { fill:var(--panel); stroke:var(--border); }
+  .node.ec { stroke:var(--ec); } .node.wf { stroke:var(--wf); }
+  .nt { fill:var(--text); font-size:12px; font-weight:600; }
+  .ns { fill:var(--muted); font-size:10px; }
+  .edge { stroke:#3d4552; fill:none; stroke-width:1.4; }
+  .hint { padding:14px 28px; color:var(--muted); font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>flowmart 数据库表结构</h1>
+  <span class="stat">共 <b id="tc">0</b> 张表 · <b id="fc">0</b> 个字段 · <b id="rc">0</b> 条外键关系</span>
+  <input id="q" placeholder="搜索表名或字段名…">
+</header>
+<div class="tabs">
+  <button class="tab active" data-v="erd">ER 关系图</button>
+  <button class="tab" data-v="cards">字段明细</button>
+</div>
+<div id="erd"><svg id="svg"></svg></div>
+<div id="cards" style="display:none"></div>
+<div class="hint">由 backend/scripts/export_schema_html.py 自动生成 · 修改模型后重新运行即可刷新</div>
+<script>
+const DATA = {"tables": [{"name": "addresses", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "user_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "users"}, {"name": "receiver", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "phone", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "province", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "city", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "district", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "detail", "type": "VARCHAR(255)", "nullable": false, "pk": false, "fk": null}, {"name": "is_default", "type": "BOOLEAN", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "cart_items", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "user_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "users"}, {"name": "sku_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "skus"}, {"name": "quantity", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "categories", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "name", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "parent_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "sort", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "order_items", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "order_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "orders"}, {"name": "sku_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "sku_name", "type": "VARCHAR(128)", "nullable": false, "pk": false, "fk": null}, {"name": "spec", "type": "VARCHAR(255)", "nullable": false, "pk": false, "fk": null}, {"name": "price", "type": "NUMERIC(12, 2)", "nullable": false, "pk": false, "fk": null}, {"name": "quantity", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "subtotal", "type": "NUMERIC(12, 2)", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "orders", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "order_no", "type": "VARCHAR(32)", "nullable": false, "pk": false, "fk": null}, {"name": "user_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "users"}, {"name": "total_amount", "type": "NUMERIC(12, 2)", "nullable": false, "pk": false, "fk": null}, {"name": "pay_amount", "type": "NUMERIC(12, 2)", "nullable": false, "pk": false, "fk": null}, {"name": "status", "type": "VARCHAR(32)", "nullable": false, "pk": false, "fk": null}, {"name": "current_node_key", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "workflow_instance_id", "type": "INTEGER", "nullable": true, "pk": false, "fk": null}, {"name": "address_snapshot", "type": "TEXT", "nullable": false, "pk": false, "fk": null}, {"name": "remark", "type": "VARCHAR(255)", "nullable": false, "pk": false, "fk": null}, {"name": "paid_at", "type": "DATETIME", "nullable": true, "pk": false, "fk": null}, {"name": "shipped_at", "type": "DATETIME", "nullable": true, "pk": false, "fk": null}, {"name": "finished_at", "type": "DATETIME", "nullable": true, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "payments", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "order_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "orders"}, {"name": "pay_no", "type": "VARCHAR(32)", "nullable": false, "pk": false, "fk": null}, {"name": "amount", "type": "NUMERIC(12, 2)", "nullable": false, "pk": false, "fk": null}, {"name": "channel", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "status", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "paid_at", "type": "DATETIME", "nullable": true, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "products", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "category_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "name", "type": "VARCHAR(128)", "nullable": false, "pk": false, "fk": null}, {"name": "description", "type": "TEXT", "nullable": false, "pk": false, "fk": null}, {"name": "cover", "type": "VARCHAR(255)", "nullable": false, "pk": false, "fk": null}, {"name": "status", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "skus", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "product_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "products"}, {"name": "sku_code", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "spec", "type": "VARCHAR(255)", "nullable": false, "pk": false, "fk": null}, {"name": "price", "type": "NUMERIC(12, 2)", "nullable": false, "pk": false, "fk": null}, {"name": "stock", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "status", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "users", "domain": "电商域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "username", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "nickname", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "phone", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "is_active", "type": "BOOLEAN", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "wf_definitions", "domain": "工作流域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "code", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "name", "type": "VARCHAR(128)", "nullable": false, "pk": false, "fk": null}, {"name": "description", "type": "TEXT", "nullable": false, "pk": false, "fk": null}, {"name": "version", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "status", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "updated_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "wf_instances", "domain": "工作流域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "definition_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "wf_definitions"}, {"name": "biz_type", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "biz_id", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "current_node_key", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "status", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "context", "type": "JSON", "nullable": false, "pk": false, "fk": null}, {"name": "started_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}, {"name": "finished_at", "type": "DATETIME", "nullable": true, "pk": false, "fk": null}]}, {"name": "wf_nodes", "domain": "工作流域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "definition_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "wf_definitions"}, {"name": "key", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "name", "type": "VARCHAR(128)", "nullable": false, "pk": false, "fk": null}, {"name": "node_type", "type": "VARCHAR(20)", "nullable": false, "pk": false, "fk": null}, {"name": "x", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "y", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "meta", "type": "JSON", "nullable": false, "pk": false, "fk": null}]}, {"name": "wf_transition_logs", "domain": "工作流域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "instance_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "wf_instances"}, {"name": "from_node_key", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "to_node_key", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "event", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "operator", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "comment", "type": "VARCHAR(255)", "nullable": false, "pk": false, "fk": null}, {"name": "snapshot", "type": "JSON", "nullable": false, "pk": false, "fk": null}, {"name": "created_at", "type": "DATETIME", "nullable": false, "pk": false, "fk": null}]}, {"name": "wf_transitions", "domain": "工作流域", "columns": [{"name": "id", "type": "INTEGER", "nullable": false, "pk": true, "fk": null}, {"name": "definition_id", "type": "INTEGER", "nullable": false, "pk": false, "fk": "wf_definitions"}, {"name": "from_node_key", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "to_node_key", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "event", "type": "VARCHAR(64)", "nullable": false, "pk": false, "fk": null}, {"name": "condition_expr", "type": "TEXT", "nullable": false, "pk": false, "fk": null}, {"name": "priority", "type": "INTEGER", "nullable": false, "pk": false, "fk": null}, {"name": "description", "type": "VARCHAR(255)", "nullable": false, "pk": false, "fk": null}]}]};
+const tables = DATA.tables;
+document.getElementById('tc').textContent = tables.length;
+document.getElementById('fc').textContent = tables.reduce((s,t)=>s+t.columns.length,0);
+const rels = [];
+tables.forEach(t => t.columns.forEach(c => { if (c.fk) rels.push([t.name, c.fk]); }));
+document.getElementById('rc').textContent = rels.length;
+
+/* ---------- 字段明细 ---------- */
+const cards = document.getElementById('cards');
+function renderCards(kw) {
+  cards.innerHTML = '';
+  tables.forEach(t => {
+    const hit = !kw || t.name.includes(kw) || t.columns.some(c=>c.name.includes(kw));
+    if (!hit) return;
+    const cls = t.domain === '电商域' ? 'ec' : 'wf';
+    const div = document.createElement('div');
+    div.className = 'card ' + cls;
+    div.innerHTML = `<h3><span>${t.name}</span><span class="badge">${t.domain} · ${t.columns.length} 字段</span></h3>
+      <table>${t.columns.map(c=>{
+        let tag = c.pk ? '<span class="pk">PK</span>' : '';
+        tag += c.fk ? `<span class="fk">FK → ${c.fk}</span>` : '';
+        return `<tr><td class="cn">${c.name}${tag}</td><td class="ct">${c.type}</td>
+                <td class="ct">${c.nullable?'NULL':'NOT NULL'}</td></tr>`;
+      }).join('')}</table>`;
+    cards.appendChild(div);
+  });
+}
+renderCards('');
+
+/* ---------- ER 图 ---------- */
+const CW = 210, CH = 34, RH = 20, PAD = 70, GAPY = 34;
+const COLX = {'电商域': 20, '工作流域': 430};
+const pos = {}, sizes = {};
+['电商域','工作流域'].forEach(d => {
+  let y = 20;
+  tables.filter(t=>t.domain===d).forEach(t => {
+    const h = CH + t.columns.length * RH + 8;
+    pos[t.name] = {x: COLX[d], y, w: CW, h, d};
+    sizes[t.name] = h;
+    y += h + GAPY;
+  });
+});
+const maxY = Math.max(...Object.values(pos).map(p=>p.y+p.h)) + 20;
+const svg = document.getElementById('svg');
+svg.setAttribute('width', 720);
+svg.setAttribute('height', maxY);
+let g = '';
+rels.forEach(([a,b]) => {
+  if (!pos[a] || !pos[b]) return;
+  const p = pos[a], q = pos[b];
+  const same = p.d === q.d;
+  let x1,y1,x2,y2,cx1,cx2;
+  if (same) {
+    x1 = p.x; y1 = p.y + 16; x2 = q.x; y2 = q.y + 16;
+    const off = Math.min(p.x, q.x) - 26;
+    cx1 = off; cx2 = off;
+  } else {
+    const left = p.x < q.x ? p : q, right = p.x < q.x ? q : p;
+    if (a === (p.x < q.x ? a : b)) {} // noop
+    const from = p.x < q.x ? p : q, to = p.x < q.x ? q : p;
+    x1 = from.x + from.w; y1 = from.y + 16;
+    x2 = to.x; y2 = to.y + 16;
+    cx1 = x1 + 60; cx2 = x2 - 60;
+    if (p.x > q.x) { x1 = p.x; y1 = p.y+16; x2 = q.x+q.w; y2 = q.y+16; cx1 = x1-60; cx2 = x2+60; }
+  }
+  g += `<path class="edge" d="M${x1},${y1} C${cx1},${y1} ${cx2},${y2} ${x2},${y2}"/>`;
+});
+Object.entries(pos).forEach(([name,p]) => {
+  const cls = p.d === '电商域' ? 'ec' : 'wf';
+  g += `<g><rect class="node ${cls}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="6"/>
+    <text class="nt" x="${p.x+12}" y="${p.y+22}">${name}</text>
+    <text class="ns" x="${p.x+p.w-12}" y="${p.y+22}" text-anchor="end">${tables.find(t=>t.name===name).columns.length} 字段</text></g>`;
+});
+svg.innerHTML = g;
+
+/* ---------- 交互 ---------- */
+document.querySelectorAll('.tab').forEach(btn => btn.onclick = () => {
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const v = btn.dataset.v;
+  document.getElementById('erd').style.display = v==='erd' ? '' : 'none';
+  document.getElementById('cards').style.display = v==='cards' ? '' : 'none';
+});
+document.getElementById('q').oninput = e => {
+  const kw = e.target.value.trim().toLowerCase();
+  if (kw) { document.querySelector('.tab[data-v=cards]').click(); }
+  renderCards(kw);
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# flowmart 后端直接依赖（间接依赖由 pip 自动解析）
+fastapi>=0.115
+uvicorn[standard]>=0.32
+sqlalchemy>=2.0
+pymysql>=1.1
+cryptography>=44.0        # MySQL 8 的 caching_sha2_password 认证必需
+alembic>=1.14
+pydantic-settings>=2.6
+simpleeval>=0.9           # 流程条件表达式的安全求值，替代 eval
+pytest>=8.0
+httpx>=0.28               # FastAPI TestClient 依赖
+python-multipart>=0.0.20
