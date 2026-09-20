@@ -1,7 +1,11 @@
 """全局配置：所有可变参数集中在此，支持 .env 覆盖。"""
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# backend/app/core/config.py -> parents[3] 即项目根目录
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -19,17 +23,24 @@ class Settings(BaseSettings):
     DB_NAME: str = "flowmart"
     DB_ECHO: bool = False
 
-    # 直接给定完整连接串时优先使用它。
-    # 用途：切到 SQLite 做本地可视化/单测，或连到其它环境，无需改代码。
+    # 数据库类型：sqlite（默认，开发期单文件便于查看）或 mysql（生产）
+    DB_DIALECT: str = "sqlite"
+    # SQLite 文件路径，留空则默认落在项目根目录 flowmart.db
+    SQLITE_PATH: str = ""
+
+    # 直接给定完整连接串时优先级最高，用于连特殊环境
     DATABASE_URL: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def database_url(self) -> str:
-        """最终连接串：DATABASE_URL 优先，否则按 MySQL 参数拼装。"""
+        """最终连接串，优先级：DATABASE_URL > DB_DIALECT > MySQL 参数拼装。"""
         if self.DATABASE_URL:
             return self.DATABASE_URL
+        if self.DB_DIALECT == "sqlite":
+            path = Path(self.SQLITE_PATH) if self.SQLITE_PATH else PROJECT_ROOT / "flowmart.db"
+            return f"sqlite:///{path.as_posix()}"
         # charset=utf8mb4 保证 emoji 与生僻字不炸
         return (
             f"mysql+pymysql://{self.DB_USER}:{quote(self.DB_PASSWORD)}"

@@ -40,24 +40,28 @@ def main() -> None:
     parser.add_argument(
         "--dialect",
         choices=["mysql", "sqlite"],
-        default="mysql",
-        help="目标数据库类型（默认 mysql）",
+        default=None,
+        help="目标数据库类型（默认跟随配置 DB_DIALECT）",
     )
     parser.add_argument(
         "--sqlite-path",
-        default=str(Path(__file__).resolve().parents[2] / "flowmart.db"),
-        help="SQLite 文件存放路径",
+        default="",
+        help="覆盖 SQLite 文件路径（默认取配置 SQLITE_PATH 或项目根 flowmart.db）",
     )
     parser.add_argument(
         "--drop", action="store_true", help="先删除所有表再重建（会清空数据）"
     )
     args = parser.parse_args()
 
-    if args.dialect == "sqlite":
-        db_path = Path(args.sqlite_path)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        url = f"sqlite:///{db_path.as_posix()}"
-        print(f"[init_db] SQLite 文件: {db_path}")
+    # 未显式指定时跟随 settings.DB_DIALECT，保证配置是唯一事实来源
+    dialect = args.dialect or settings.dialect
+
+    if dialect == "sqlite":
+        if args.sqlite_path:
+            url = f"sqlite:///{Path(args.sqlite_path).as_posix()}"
+        else:
+            url = settings.database_url
+        print(f"[init_db] SQLite: {url}")
     else:
         url = settings.database_url
         ensure_mysql_database(settings.server_database_url)
@@ -65,7 +69,7 @@ def main() -> None:
     engine = create_engine(
         url,
         future=True,
-        connect_args={"check_same_thread": False} if args.dialect == "sqlite" else {},
+        connect_args={"check_same_thread": False} if dialect == "sqlite" else {},
     )
 
     if args.drop:
