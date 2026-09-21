@@ -65,3 +65,22 @@ def test_logout_clears_both_cookies(raw_client):
     # 访问与刷新两个 Cookie 都必须被置空（max-age=0）
     assert "fm_token=" in sc and "max-age=0" in sc.lower()
     assert "fm_refresh=" in sc and "max-age=0" in sc.lower()
+
+
+def test_expired_refresh_token_rejected(raw_client, monkeypatch):
+    # 刷新令牌过期 → /auth/refresh 必须 401（逻辑在 decode_refresh_token 的过期校验）
+    monkeypatch.setattr("app.core.security.settings.REFRESH_TOKEN_EXPIRE_DAYS", -1)
+    expired_refresh = create_refresh_token(1)
+    r = raw_client.post(
+        "/api/v1/auth/refresh", headers={"Authorization": f"Bearer {expired_refresh}"}
+    )
+    assert r.status_code == 401
+
+
+def test_access_token_cannot_be_used_as_refresh(raw_client):
+    # 反向隔离：访问令牌不能当刷新令牌用（type 必须为 refresh）
+    access = create_access_token(1)
+    r = raw_client.post(
+        "/api/v1/auth/refresh", headers={"Authorization": f"Bearer {access}"}
+    )
+    assert r.status_code == 401
