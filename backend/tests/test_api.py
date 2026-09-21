@@ -48,6 +48,41 @@ def test_create_order_starts_workflow(client, sku):
     assert client.get(f"/api/v1/products/{sku.product_id}").json()["skus"][0]["stock"] == 8
 
 
+def test_create_order_address_ownership_and_snapshot(client, sku, db):
+    """下单传他人 address_id 必须 404 拒绝（防 IDOR 伪造收货快照，且不泄露该地址是否存在）；
+    传自己的 address_id 则生成 address_snapshot。"""
+    from app.models.ecommerce import Address, User
+
+    other = User(username="other_addr", nickname="他人", phone="13900000000",
+                 password_hash="x", is_admin=False)
+    db.add(other)
+    db.flush()
+    other_addr = Address(user_id=other.id, receiver="他人", phone="13900000000",
+                         province="北京", city="北京", district="朝阳", detail="某路1号")
+    db.add(other_addr)
+    db.commit()
+
+    # 当前用户用他人地址下单 → 404，且不暴露「该地址存在」
+    r = client.post("/api/v1/orders", json={
+        "items": [{"sku_id": sku.id, "quantity": 1}],
+        "address_id": other_addr.id,
+    })
+    assert r.status_code == 404, r.text
+    assert "收货地址不存在" in r.json()["detail"]
+
+    # 自己的地址 → 201，且快照含收件人
+    mine = Address(user_id=client.user.id, receiver="本人", phone="13800000000",
+                   province="广东", city="深圳", district="南山", detail="某路2号")
+    db.add(mine)
+    db.commit()
+    r2 = client.post("/api/v1/orders", json={
+        "items": [{"sku_id": sku.id, "quantity": 1}],
+        "address_id": mine.id,
+    })
+    assert r2.status_code == 201, r2.text
+    assert "本人" in r2.json()["address_snapshot"]
+
+
 def test_pay_advances_to_paid(client, sku):
     r = client.post(
         "/api/v1/orders",

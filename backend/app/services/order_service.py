@@ -133,8 +133,10 @@ class OrderService:
         address = None
         if address_id:
             address = self.db.get(Address, address_id)
-            if address is None:
-                raise ValueError(f"收货地址 {address_id} 不存在")
+            # 越权防护：地址必须归属当前下单用户，否则与「不存在」同等处理，
+            # 不泄露他人地址是否存在（与 api/users.py 的 _assert_owner 约定一致）
+            if address is None or address.user_id != user_id:
+                raise ValueError("收货地址不存在")
 
         total = Decimal("0.00")
         order_items: list[OrderItem] = []

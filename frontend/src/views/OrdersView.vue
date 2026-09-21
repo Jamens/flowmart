@@ -135,6 +135,16 @@
         <el-form-item label="数量">
           <el-input-number v-model="form.quantity" :min="1" />
         </el-form-item>
+        <el-form-item label="收货地址">
+          <el-select v-model="form.address_id" placeholder="选择收货地址（可不选）" clearable style="width: 100%">
+            <el-option
+              v-for="a in addresses"
+              :key="a.id"
+              :label="`${a.receiver} ${a.phone}｜${a.province}${a.city}${a.district}${a.detail}${a.is_default ? '（默认）' : ''}`"
+              :value="a.id"
+            />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
@@ -182,7 +192,9 @@ const drawer = ref(false)
 const detail = ref(null)
 const createVisible = ref(false)
 const skuOptions = ref([])
-const form = ref({ sku_id: null, quantity: 1 })
+const addresses = ref([])
+const currentUserId = ref(null)
+const form = ref({ sku_id: null, quantity: 1, address_id: null })
 
 function tagType(s) {
   if (s === 'completed') return 'success'
@@ -243,7 +255,14 @@ async function fire(e) {
 }
 
 async function openCreate() {
-  form.value = { sku_id: null, quantity: 1 }
+  form.value = { sku_id: null, quantity: 1, address_id: null }
+  try {
+    // 收货地址强制走归属校验（路径 user_id 必须等于令牌用户），故先取当前用户再拉地址列表
+    if (!currentUserId.value) currentUserId.value = (await api.me()).id
+    addresses.value = await api.listAddresses(currentUserId.value)
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
   if (!skuOptions.value.length) {
     // 下拉框要全量商品（不分页），用 listAllProducts 而不是分页的 listProducts
     const products = await api.listAllProducts()
@@ -257,10 +276,13 @@ async function openCreate() {
 async function submitCreate() {
   if (!form.value.sku_id) return ElMessage.warning('请选择 SKU')
   try {
-    // 后端按当前登录用户归属订单（忽略请求体 user_id，防冒充）；不传 address_id 则订单无收货快照（新建订单弹窗暂未选地址）
-    await api.createOrder({
+    // 后端按当前登录用户归属订单（忽略请求体 user_id，防冒充）；address_id 选中才传，
+    // 后端据此生成 address_snapshot；不传则订单无收货快照（详情页显示「-」）
+    const payload = {
       items: [{ sku_id: form.value.sku_id, quantity: form.value.quantity }],
-    })
+    }
+    if (form.value.address_id) payload.address_id = form.value.address_id
+    await api.createOrder(payload)
     ElMessage.success('下单成功，流程已自动启动')
     createVisible.value = false
     await load()

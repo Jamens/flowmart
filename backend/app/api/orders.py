@@ -161,8 +161,10 @@ def create_order(
             remark=payload.remark,
         )
     except ValueError as exc:
-        # 库存不足、SKU 不存在等属于业务校验失败，用 400 而不是 500
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # 库存不足、SKU 不存在等属于业务校验失败，用 400 而不是 500；
+        # 地址相关的越权/不存在统一 404（与 _assert_owner 约定一致），不泄露目标是否存在
+        status = 404 if "收货地址" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
     return _serialize(order, svc)
 
 
