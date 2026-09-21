@@ -285,9 +285,10 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 用户与地址（软删除、路径内 `user_id+address_id` 联合过滤防越权、默认地址互斥）
 - [x] 分类（两级树；删除前应用层校验商品/子分类引用，防间接环）
 - [x] 前端管理后台（订单管理页、流程设计器、登录页）
+- [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 109 passed）
+- [x] 测试（pytest 全量 110 passed）
 
 ### ❌ 待实现
 
