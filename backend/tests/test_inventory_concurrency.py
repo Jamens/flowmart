@@ -165,6 +165,33 @@ def test_return_stock_restores_on_cancel(tmp_path):
     assert _fresh_stock(eng, sku_id) == 10
 
 
+def test_duplicate_sku_in_one_order_rejected(tmp_path):
+    """同一 SKU 在一单里出现两行各买 2（共需 4），库存仅 2：整单必须被拒、库存不变。
+
+    这最考验「预检用内存库存 + 原子 UPDATE 用 DB 库存」两份真相的配合：
+    无论第二行预检读到的是过期内存值还是刷新值，最终都靠原子 UPDATE 的
+    rowcount==0 拦下，绝不会超卖。
+    """
+    eng = _make_engine(tmp_path)
+    buyer_id, (sku_id,) = _seed(eng, [2])
+    Session = sessionmaker(bind=eng, future=True)
+    with Session() as s:
+        try:
+            OrderService(s).create_order(
+                user_id=buyer_id,
+                items=[
+                    {"sku_id": sku_id, "quantity": 2},
+                    {"sku_id": sku_id, "quantity": 2},
+                ],
+            )
+            raise AssertionError("重复 SKU 超量应当被拒")
+        except ValueError:
+            pass
+    with Session() as s:
+        assert s.get(Sku, sku_id).stock == 2, "库存不能因半截扣减而减少"
+        assert s.execute(select(Order)).scalars().all() == []
+
+
 # ---------------- 多线程：并发安全 ----------------
 
 def test_concurrent_orders_no_oversell(tmp_path):

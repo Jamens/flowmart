@@ -147,15 +147,18 @@ class OrderService:
 
             sku = self.db.get(Sku, sku_id)
             if sku is None:
-                self.db.rollback()
+                if auto_commit:
+                    self.db.rollback()
                 raise ValueError(f"SKU {sku_id} 不存在")
             if sku.status != "on_sale":
-                self.db.rollback()
+                if auto_commit:
+                    self.db.rollback()
                 raise ValueError(f"SKU {sku_id} 已下架")
             # 友好预检：非原子，仅用于提前拦截并给出中文库存不足提示。
             # 真正的扣减见下方原子 UPDATE —— 只有它才能杜绝并发超卖。
             if sku.stock < quantity:
-                self.db.rollback()
+                if auto_commit:
+                    self.db.rollback()
                 raise ValueError(
                     f"SKU {sku_id} 库存不足（剩 {sku.stock}，需要 {quantity}）"
                 )
@@ -187,14 +190,20 @@ class OrderService:
             if result.rowcount == 0:
                 # 扣减失败（库存真不够或被并发抢光）：回滚本次事务，
                 # 撤销前面 SKU 已执行的原子扣减，避免留下半截状态。
-                # 注意 get_db 只 close 不 rollback，这里必须自己 rollback。
-                self.db.rollback()
+                # auto_commit=True：get_db 只 close 不 rollback，必须自己回滚；
+                # auto_commit=False：事务由调用方掌管，这里不动，交给调用方回滚。
+                if auto_commit:
+                    self.db.rollback()
                 real_stock = self.db.execute(
                     select(Sku.stock).where(Sku.id == sku_id)
                 ).scalar()
                 raise ValueError(
                     f"SKU {sku_id} 库存不足（剩 {real_stock}，需要 {quantity}）"
                 )
+            # 扣减成功：让同会话后续读取（含同一 SKU 重复出现于多行时的下一行预检）
+            # 看到最新库存，避免被过期的身份映射库存误导文案。不影响正确性，
+            # 因为下一行是否放行仍由原子 UPDATE 的 rowcount 真正把关。
+            self.db.expire(sku)
 
         snapshot = ""
         if address:
