@@ -76,6 +76,20 @@ DB_PASSWORD=1234560
 | PATCH | `/api/v1/cart/{id}` | 修改数量（传 0 表示移除） |
 | DELETE | `/api/v1/cart/{id}` | 移除商品 |
 | POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空） |
+| GET | `/api/v1/users` | 用户列表（active_only 过滤） |
+| POST | `/api/v1/users` | 创建用户 |
+| GET | `/api/v1/users/{id}` | 用户详情（含地址） |
+| PATCH | `/api/v1/users/{id}` | 更新用户 |
+| DELETE | `/api/v1/users/{id}` | 禁用用户（软删除） |
+| GET | `/api/v1/users/{id}/addresses` | 收货地址列表 |
+| POST | `/api/v1/users/{id}/addresses` | 新增地址 |
+| PATCH | `/api/v1/users/{id}/addresses/{aid}` | 修改地址 |
+| DELETE | `/api/v1/users/{id}/addresses/{aid}` | 删除地址 |
+| GET | `/api/v1/categories` | 分类列表（带商品数） |
+| GET | `/api/v1/categories/tree` | 分类树 |
+| POST | `/api/v1/categories` | 创建分类 |
+| PATCH | `/api/v1/categories/{id}` | 修改分类 |
+| DELETE | `/api/v1/categories/{id}` | 删除分类（有商品时拒绝） |
 | GET | `/api/v1/orders/{id}` | 订单详情，含明细、可执行动作、流转时间线 |
 | POST | `/api/v1/orders/{id}/actions/{event}` | 推进流转（pay/ship/confirm/cancel/refund/approve/reject） |
 | GET | `/api/v1/workflows/definitions` | 流程定义列表 |
@@ -90,6 +104,21 @@ DB_PASSWORD=1234560
 - 累加后仍受库存约束，不能靠反复加入突破上限
 - 结算与「清空购物车」在同一事务内完成：下单失败时购物车保留，
   不会出现「订单没生成、购物车却被清空」
+
+### 用户与地址（`backend/app/api/users.py`）
+
+- 删除用户是**软删除**（置 `is_active=False`）：`orders.user_id` 是外键，
+  物理删除会破坏历史订单，电商系统里用户数据必须保留
+- 地址接口把 `user_id` 放在路径中（`/users/{id}/addresses/{aid}`），
+  查询时 `user_id` 与 `address_id` 联合过滤 —— 这是从购物车越权 bug 学到的教训：
+  与其事后补校验，不如设计成不容易写错
+- **默认地址互斥**：设为默认时自动清除该用户其它地址的默认标记，保证默认地址唯一
+
+### 分类（`backend/app/api/categories.py`）
+
+- 两级树结构（`parent_id`），`/categories/tree` 直接返回带 children 的树
+- `products.category_id` 是普通 Integer 而非外键，**数据库不会兜底** ——
+  删除分类前必须在应用层校验有无商品/子分类引用，否则商品会指向不存在的分类
 
 ### 前端管理后台（`frontend/`）
 
@@ -175,7 +204,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 
 - [ ] 用户认证与鉴权（当前订单归属固定在 `user_id=1`，仅为演示）
 - [ ] 购物车前端页面（后端 API 已完整并测试通过）
-- [ ] `users` / `addresses` / `categories` 的 CRUD 接口（有表无接口）
+- [ ] 商品 / 分类 / 用户的管理页面（目前前端只有订单页与设计器）
 - [ ] Alembic 迁移脚本（当前用 `create_all`，模型变更后需删表重建）
 - [ ] 库存并发控制（高并发下需要行锁或乐观锁）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本）
