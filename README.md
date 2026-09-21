@@ -233,13 +233,35 @@ docs/            表结构与数据可视化页面（由脚本生成）
   本项目改用 npm，原因记录在 `frontend/.npmrc`。
 - **Git Bash 下 `taskkill /F` 参数会被路径转换**：需 `export MSYS_NO_PATHCONV=1`。
 
-## 待办
+## 功能清单（状态看板）
 
-- [x] 用户认证与鉴权（JWT + 依赖注入，身份取自令牌而非前端 `user_id`）
-- [x] 角色/权限（RBAC：管理员 / 普通买家，用户管理与订单流转推进仅管理员；买家仅见自己资料与订单）
-- [x] 跨域收紧 + JWT 写入 httpOnly Cookie（CORS 仅放行已知前端源 `settings.CORS_ORIGINS`，禁用 `*`；Cookie 不可被 JS 读取，防御 XSS 窃令牌；退出登录走 `POST /auth/logout`）
+> 详细设计见上方「已完成功能」。此处为功能级勾选，便于一眼看清进度。
+
+### ✅ 已实现
+
+- [x] 工作流引擎（数据库驱动、可配置：`start/fire/available_events`、流转日志 + 上下文快照、非法流转显式报错）
+- [x] 订单服务（创建订单同事务：校验库存 → 算金额 → 扣库存 → 启动流程 → 推进待付款）
+- [x] 库存并发控制（DB 层原子条件 UPDATE：`UPDATE ... WHERE stock >= qty` 靠 `rowcount==0` 判不足；归还用 `stock = stock + qty` 累加，杜绝 TOCTOU 超卖与并发丢失更新）
+- [x] 鉴权基础（JWT HS256 + PBKDF2 密码哈希 + 依赖注入身份，前端无法伪造 `user_id`）
+- [x] 跨域收紧 + JWT 写入 httpOnly Cookie（CORS 仅放行 `settings.CORS_ORIGINS`；`POST /auth/logout` 清 Cookie）
+- [x] RBAC 角色权限（管理员 / 普通买家；用户管理与订单流转仅管理员；买家越权访问统一 404；初始管理员可配置且空值启动报错）
+- [x] REST API 全量（auth / products / orders / cart / users+addresses / categories / workflows / admin_db 只读）
+- [x] 购物车（同 SKU 累加、累加受库存约束、结算与清空同事务）
+- [x] 用户与地址（软删除、路径内 `user_id+address_id` 联合过滤防越权、默认地址互斥）
+- [x] 分类（两级树；删除前应用层校验商品/子分类引用，防间接环）
+- [x] 前端管理后台（订单管理页、流程设计器、登录页）
+- [x] 工具脚本（init_db / seed / export_schema / export_data_html）
+- [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
+- [x] 测试（pytest 全量 92 passed）
+
+### ❌ 待实现
+
 - [ ] 购物车前端页面（后端 API 已完整并测试通过）
-- [ ] 商品 / 分类 / 用户的管理页面（目前前端只有订单页与设计器）
+- [ ] 商品 / 分类 / 用户 管理页面（目前前端只有订单页 + 设计器 + 登录页）
 - [ ] Alembic 迁移脚本（当前 `init_db.py` 用 `create_all` + 存量列补丁，模型变更后仍需 `--drop`）
-- [x] 库存并发控制（DB 层原子条件 UPDATE：`UPDATE ... WHERE stock >= qty`，靠 `rowcount==0` 判定不足；取消/退款归还用 `stock = stock + qty` 原子累加，杜绝 TOCTOU 超卖与并发丢失更新；`tests/test_inventory_concurrency.py` 多线程复验）
-- [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本）
+- [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本，无版本历史 / 回滚）
+- [ ] JWT 刷新 / 续期机制（当前令牌过期即需重新登录）
+- [ ] 列表接口分页（orders / products / users 目前全量返回，数据量大时需分页）
+- [ ] 登录限流（无防暴力破解的速率限制）
+- [ ] 订单搜索 / 筛选增强（目前仅按 `status` 筛选，无关键词 / 时间范围）
+- [ ] （可选）邮箱 / 手机验证
