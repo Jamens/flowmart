@@ -4,6 +4,9 @@
       <el-checkbox v-model="activeOnly" @change="load">只看启用中</el-checkbox>
       <el-button @click="load">刷新</el-button>
       <el-button type="primary" @click="openCreate">新建用户</el-button>
+      <!-- 地址管理对所有人开放（后端允许管理自己的地址），
+           不能只挂在用户行上 —— 列表本身仅管理员可见，否则普通用户永远进不去 -->
+      <el-button :disabled="!myId" @click="openAddresses({ id: myId })">我的收货地址</el-button>
     </div>
 
     <el-table :data="list" stripe v-loading="loading">
@@ -21,23 +24,14 @@
       <el-table-column label="操作" width="230">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
+          <!-- 可反向操作：后端允许管理员重新启用，误禁用必须能恢复 -->
           <el-button
             size="small"
-            type="warning"
-            :disabled="!row.is_active || row.id === myId"
-            @click="disable(row)"
+            :type="row.is_active ? 'warning' : 'success'"
+            :disabled="row.id === myId"
+            @click="toggleActive(row)"
           >
-            禁用
-          </el-button>
-          <!-- 地址接口强制归属校验：只能管理自己的地址，他人一律 404 -->
-          <el-button
-            size="small"
-            type="primary"
-            text
-            :disabled="row.id !== myId"
-            @click="openAddresses(row)"
-          >
-            我的地址
+            {{ row.is_active ? '禁用' : '启用' }}
           </el-button>
         </template>
       </el-table-column>
@@ -56,7 +50,13 @@
             <el-input v-model="userForm.username" maxlength="64" placeholder="必填，唯一" />
           </el-form-item>
           <el-form-item label="初始密码">
-            <el-input v-model="userForm.password" type="password" show-password placeholder="留空则不设密码" />
+            <el-input
+              v-model="userForm.password"
+              type="password"
+              show-password
+              maxlength="128"
+              placeholder="留空则不设密码"
+            />
           </el-form-item>
         </template>
         <el-form-item label="昵称">
@@ -170,8 +170,10 @@ async function loadMe() {
   try {
     const me = await api.me()
     myId.value = me.id
-  } catch {
+  } catch (e) {
+    // 拿不到自己的 id 就等于整个地址管理不可用，必须让用户看见原因
     myId.value = null
+    ElMessage.error(e.message)
   }
 }
 
@@ -212,7 +214,18 @@ async function submitUser() {
   }
 }
 
-async function disable(row) {
+async function toggleActive(row) {
+  if (!row.is_active) {
+    // 重新启用：后端允许管理员置 is_active=True（改资料接口）
+    try {
+      await api.updateUser(row.id, { is_active: true })
+      ElMessage.success('已启用')
+      await load()
+    } catch (e) {
+      ElMessage.error(e.message)
+    }
+    return
+  }
   try {
     await ElMessageBox.confirm(
       `确定禁用用户「${row.username}」？该操作为软删除，历史订单保留。`,
@@ -232,6 +245,8 @@ async function disable(row) {
 }
 
 async function openAddresses(row) {
+  // 关掉可能残留的内层弹窗，否则再次打开抽屉会直接弹出地址表单
+  addrFormVisible.value = false
   addrVisible.value = true
   await loadAddresses(row.id)
 }
@@ -257,11 +272,22 @@ async function submitAddr() {
   const f = addrForm.value
   if (!f.receiver.trim()) return ElMessage.warning('请填写收货人')
   if (!f.phone.trim()) return ElMessage.warning('请填写电话')
+  // 显式列出字段：addrForm 来自 {...row} 会带上 id，虽然 Pydantic 会忽略，
+  // 但把主键塞进请求体是坏习惯
+  const payload = {
+    receiver: f.receiver,
+    phone: f.phone,
+    province: f.province,
+    city: f.city,
+    district: f.district,
+    detail: f.detail,
+    is_default: f.is_default,
+  }
   try {
     if (addrEditing.value) {
-      await api.updateAddress(myId.value, addrEditing.value.id, f)
+      await api.updateAddress(myId.value, addrEditing.value.id, payload)
     } else {
-      await api.createAddress(myId.value, f)
+      await api.createAddress(myId.value, payload)
     }
     ElMessage.success('已保存')
     addrFormVisible.value = false
