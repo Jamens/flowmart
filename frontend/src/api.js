@@ -8,13 +8,44 @@ export function setUnauthorizedHandler(fn) {
 
 // 令牌由后端写入 httpOnly Cookie，浏览器随 credentials: 'include' 自动携带；
 // 前端不再用 localStorage 存明文令牌，从根本上避免 XSS 窃令牌。
+// 共享的刷新请求：并发 401 只刷一次，避免竞态 / 重复刷新
+let refreshPromise = null
+async function doRefresh() {
+  if (!refreshPromise) {
+    refreshPromise = fetch(BASE + '/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error('refresh failed')
+      })
+      .finally(() => {
+        refreshPromise = null
+      })
+  }
+  return refreshPromise
+}
+
 async function request(path, options = {}) {
   // 合并默认头与调用方传入的头；credentials:'include' 放在最后，确保 Cookie 鉴权永不被覆盖掉
-  const res = await fetch(BASE + path, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    credentials: 'include',
-  })
+  const doFetch = () =>
+    fetch(BASE + path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      credentials: 'include',
+    })
+  let res = await doFetch()
+  // 访问令牌过期：静默用刷新令牌换发，再重试一次原请求。
+  // 防循环：刷新端点自身不重试；重试仍 401 才落到下方登录失效处理。
+  if (res.status === 401 && !path.includes('/auth/refresh')) {
+    try {
+      await doRefresh()
+      res = await doFetch()
+    } catch {
+      // 刷新失败，保持 res 为原 401，落到下方登录失效处理
+    }
+  }
   if (res.status === 401) {
     // 令牌失效/缺失：回到登录页，避免卡在错误态（Cookie 由后端 /auth/logout 清除）
     if (unauthorizedHandler) unauthorizedHandler()

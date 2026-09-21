@@ -18,7 +18,8 @@ class Settings(BaseSettings):
 
     # JWT 签名密钥：生产必须改成强随机值并通过环境变量注入，默认仅开发可用
     SECRET_KEY: str = "dev-only-insecure-secret-change-me"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 默认 1 天
+    # 短期访问令牌：过期靠 /auth/refresh 静默续期，故设短（默认 30 分钟）。生产可调。
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     # 初始管理员用户名：首次 seed / 迁移（init_db、seed）时把该用户提升为管理员。
     # 生产务必改为真实管理员账号，切勿沿用演示值 zhangsan。
@@ -31,6 +32,10 @@ class Settings(BaseSettings):
     JWT_COOKIE_NAME: str = "fm_token"
     COOKIE_SECURE: bool = False  # 生产必须 True（仅 HTTPS 下浏览器才接受 httpOnly+Secure）
     COOKIE_SAMESITE: str = "lax"  # lax / strict：lax 兼容同站前端，strict 抗 CSRF 更强
+
+    # 刷新令牌：长期有效、写独立 httpOnly Cookie，仅用于 /auth/refresh 换发访问令牌
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    REFRESH_TOKEN_COOKIE_NAME: str = "fm_refresh"
 
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"

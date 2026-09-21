@@ -54,7 +54,7 @@ def create_access_token(sub: int | str, expires_minutes: int | None = None, extr
     """签发 HS256 访问令牌，sub 固定为用户 id（字符串化以便解码）。"""
     now = int(time.time())
     exp = now + (expires_minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES) * 60
-    payload = {"sub": str(sub), "iat": now, "exp": exp}
+    payload = {"sub": str(sub), "iat": now, "exp": exp, "type": "access"}
     if extra:
         payload.update(extra)
     h = _b64u(json.dumps({"alg": ALG, "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
@@ -77,6 +77,44 @@ def decode_access_token(token: str) -> dict:
         payload = json.loads(_b64d(p))
     except (JWTError, ValueError, binascii.Error):
         raise JWTError("签名无效或载荷损坏")
+    if payload.get("type") != "access":
+        raise JWTError("令牌类型错误")
+    if "sub" not in payload:
+        raise JWTError("缺少用户标识")
+    if "exp" not in payload:
+        raise JWTError("缺少过期时间")
+    if payload["exp"] < int(time.time()):
+        raise JWTError("令牌已过期")
+    return payload
+
+
+def create_refresh_token(sub: int | str) -> str:
+    """签发 HS256 刷新令牌：长期有效、type=refresh，仅用于 /auth/refresh 换发访问令牌。"""
+    now = int(time.time())
+    exp = now + settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+    payload = {"sub": str(sub), "iat": now, "exp": exp, "type": "refresh"}
+    h = _b64u(json.dumps({"alg": ALG, "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
+    p = _b64u(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    sig = hmac.new(settings.SECRET_KEY.encode("utf-8"), f"{h}.{p}".encode("utf-8"), hashlib.sha256).digest()
+    return f"{h}.{p}.{_b64u(sig)}"
+
+
+def decode_refresh_token(token: str) -> dict:
+    """校验刷新令牌：签名/过期 + type 必须为 refresh，否则 JWTError（统一转 401）。"""
+    try:
+        h, p, s = token.split(".")
+    except ValueError:
+        raise JWTError("令牌格式错误")
+    try:
+        expected = hmac.new(settings.SECRET_KEY.encode("utf-8"), f"{h}.{p}".encode("utf-8"), hashlib.sha256).digest()
+        # 常量时间比较，防止时序攻击；坏 base64 也在此兜住
+        if not hmac.compare_digest(expected, _b64d(s)):
+            raise JWTError("签名无效")
+        payload = json.loads(_b64d(p))
+    except (JWTError, ValueError, binascii.Error):
+        raise JWTError("签名无效或载荷损坏")
+    if payload.get("type") != "refresh":
+        raise JWTError("令牌类型错误")
     if "sub" not in payload:
         raise JWTError("缺少用户标识")
     if "exp" not in payload:
@@ -137,6 +175,28 @@ def clear_auth_cookie(response: Response) -> None:
     """
     response.delete_cookie(
         settings.JWT_COOKIE_NAME,
+        secure=settings.COOKIE_SECURE,
+        httponly=True,
+        samesite=settings.COOKIE_SAMESITE,
+    )
+
+
+def set_refresh_cookie(response: Response, token: str) -> None:
+    """把刷新令牌写入独立 httpOnly Cookie：与访问令牌隔离，仅 /auth/refresh 消费。"""
+    response.set_cookie(
+        settings.REFRESH_TOKEN_COOKIE_NAME,
+        token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+    )
+
+
+def clear_refresh_cookie(response: Response) -> None:
+    """退出登录：清除刷新令牌 Cookie（属性必须与 set_refresh_cookie 一致才能清掉）。"""
+    response.delete_cookie(
+        settings.REFRESH_TOKEN_COOKIE_NAME,
         secure=settings.COOKIE_SECURE,
         httponly=True,
         samesite=settings.COOKIE_SAMESITE,

@@ -24,6 +24,9 @@ API = "/api/v1"
 
 # 按设计公开的端点：注册/登录/退出本身不可能要求已登录
 PUBLIC = {f"{API}/auth/login", f"{API}/auth/register", f"{API}/auth/logout"}
+# 刷新端点用「刷新令牌」鉴权（非访问令牌），故不挂 get_current_user；
+# 单独列出以免被下方覆盖测试误判为漏鉴权（其鉴权由 decode_refresh_token 完成）
+REFRESH_AUTH = {f"{API}/auth/refresh"}
 
 MODULES = [auth, products, categories, cart, users, orders, workflows, admin_db]
 
@@ -64,7 +67,7 @@ def test_every_endpoint_requires_auth():
     missing = [
         f"{m} {path}"
         for m, path, found in _all_endpoints()
-        if path not in PUBLIC and not found
+        if path not in PUBLIC and path not in REFRESH_AUTH and not found
     ]
     assert not missing, (
         "以下端点没有挂任何鉴权依赖（应加 get_current_user 或 require_admin）："
