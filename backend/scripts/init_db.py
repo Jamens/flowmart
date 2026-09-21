@@ -150,7 +150,11 @@ def main() -> None:
     _backfill_demo_passwords(engine)
 
     # 开发便利：把配置的初始管理员（settings.BOOTSTRAP_ADMIN）标记为 is_admin，避免存量库无管理员可用。
-    _backfill_admin(engine)
+    try:
+        _backfill_admin(engine)
+    except RuntimeError as e:
+        print(f"[init_db] 启动校验失败：{e}", file=sys.stderr)
+        sys.exit(1)
 
     tables = sorted(Base.metadata.tables.keys())
     print(f"[init_db] 建表完成，共 {len(tables)} 张表：")

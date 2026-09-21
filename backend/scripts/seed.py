@@ -286,6 +286,10 @@ def main() -> None:
             (WorkflowTransitionLog, "流转日志"),
         ]:
             print(f"  {name:8s} {len(db.execute(select(model)).scalars().all())}")
+    except RuntimeError as e:
+        # 启动校验失败（如零管理员）直接以非零状态退出，错误信息清晰可见
+        print(f"[seed] 启动校验失败：{e}", file=sys.stderr)
+        sys.exit(1)
     finally:
         db.close()
 

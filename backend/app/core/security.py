@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -155,10 +156,10 @@ def ensure_admin_exists(db: Session) -> None:
     与 BOOTSTRAP_ADMIN 配合：即便配置写错了名字（该用户没被 seed 进去），
     也能在启动时暴露，而不是让所有管理接口悄悄不可用。
     """
-    from sqlalchemy import func, select
-
     admin_count = db.execute(
-        select(func.count()).select_from(User).where(User.is_admin.is_(True))
+        select(func.count())
+        .select_from(User)
+        .where(User.is_admin.is_(True), User.is_active.is_(True))
     ).scalar()
     if not admin_count:
         raise RuntimeError(
