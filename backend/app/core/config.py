@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     # 生产务必改为真实管理员账号，切勿沿用演示值 zhangsan。
     BOOTSTRAP_ADMIN: str = "zhangsan"
 
+    # 跨域（CORS）：仅放行已知前端源，禁止随意 `*`（配合 credentials 使用时 `*` 会被浏览器拒绝）
+    CORS_ORIGINS: list[str] = ["http://127.0.0.1:5173", "http://localhost:5173"]
+
+    # JWT 写入 httpOnly Cookie（防御 XSS 窃令牌，前端不再用 localStorage 存明文令牌）
+    JWT_COOKIE_NAME: str = "fm_token"
+    COOKIE_SECURE: bool = False  # 生产必须 True（仅 HTTPS 下浏览器才接受 httpOnly+Secure）
+    COOKIE_SAMESITE: str = "lax"  # lax / strict：lax 兼容同站前端，strict 抗 CSRF 更强
+
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306

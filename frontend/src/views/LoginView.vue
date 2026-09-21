@@ -22,7 +22,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { api, setToken } from '../api.js'
+import { api } from '../api.js'
 
 const emit = defineEmits(['logged-in'])
 
@@ -39,9 +39,9 @@ async function onSubmit() {
   loading.value = true
   error.value = ''
   try {
-    const data = await api.login(username.value, password.value)
-    setToken(data.access_token)
-    emit('logged-in', data.access_token)
+    await api.login(username.value, password.value)
+    // 后端已将 JWT 写入 httpOnly Cookie，浏览器自动携带；无需前端存令牌
+    emit('logged-in')
   } catch (e) {
     error.value = e.message || '登录失败'
   } finally {

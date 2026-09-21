@@ -20,31 +20,47 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { api, getToken, setToken, clearToken, setUnauthorizedHandler } from './api.js'
+import { onMounted, ref } from 'vue'
+import { api, setUnauthorizedHandler } from './api.js'
 import LoginView from './views/LoginView.vue'
 import OrdersView from './views/OrdersView.vue'
 import DesignerView from './views/DesignerView.vue'
 
-const token = ref(getToken())
-const loggedIn = computed(() => !!token.value)
+// 登录态由后端 httpOnly Cookie 决定，前端不再持有明文令牌
+const loggedIn = ref(false)
 const active = ref('orders')
 
-// 任意接口 401（令牌失效）时回到登录页
-onMounted(() => {
+// 任意接口 401（Cookie 失效）时回到登录页
+onMounted(async () => {
   setUnauthorizedHandler(() => {
-    token.value = ''
+    loggedIn.value = false
   })
+  // 凭 Cookie 探活：已登录则直接进入后台
+  try {
+    await api.me()
+    loggedIn.value = true
+  } catch {
+    loggedIn.value = false
+  }
 })
 
-function onLoggedIn(t) {
-  setToken(t)
-  token.value = t
+async function onLoggedIn() {
+  // 登录接口已写入 httpOnly Cookie，无需前端存令牌；探活确认后进入后台
+  try {
+    await api.me()
+    loggedIn.value = true
+  } catch {
+    loggedIn.value = false
+  }
 }
 
-function onLogout() {
-  clearToken()
-  token.value = ''
+async function onLogout() {
+  try {
+    await api.logout()
+  } catch {
+    // 忽略：即便失败也强制回到登录页
+  }
+  loggedIn.value = false
 }
 </script>
 

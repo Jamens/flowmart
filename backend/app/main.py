@@ -12,10 +12,10 @@ app = FastAPI(
     debug=settings.DEBUG,
 )
 
-# 前端开发服务器（Vite 5173）与后端不同源，必须放开跨域
+# 跨域：仅放行配置中的已知前端源（settings.CORS_ORIGINS），禁止 `*`，配合 credentials 使用
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

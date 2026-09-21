@@ -34,7 +34,11 @@ cd frontend && npm install && npm run dev
 - Swagger 接口文档：http://127.0.0.1:8000/docs
 - 管理后台：http://127.0.0.1:5173（含订单管理与流程设计器）
 
-前端已通过 Vite proxy 把 `/api` 转发到后端，无需额外配置跨域。
+前端已通过 Vite proxy 把 `/api` 转发到后端，开发期无需额外配置跨域。
+
+- **生产部署注意**：浏览器走 Cookie 鉴权时，必须设置 `CORS_ORIGINS` 为真实前端域名（不再用 `*`），
+  并把 `COOKIE_SECURE` 设为 `True`（仅 HTTPS 下浏览器才接受 `HttpOnly + Secure` 的 Cookie）。
+  `logout` 清 Cookie 的 `secure`/`samesite` 与 `set_auth_cookie` 严格一致，否则生产环境清不掉。
 
 ## 数据库切换
 
@@ -67,6 +71,10 @@ DB_PASSWORD=1234560
 
 - **JWT（HS256）**：登录/注册签发令牌，后续请求在 `Authorization: Bearer` 头携带；
   令牌只含 `sub`（用户 id）、`iat`、`exp`，用 HMAC-SHA256 签名，`hmac.compare_digest` 常量时间校验防时序攻击。
+- **令牌存储改为 httpOnly Cookie（抗 XSS）**：登录/注册在返回 Bearer 令牌（供 API 客户端）的同时，
+  把 JWT 写入 `HttpOnly` Cookie；浏览器同源请求由 Cookie 自动携带（`SameSite=Lax`），前端不再用 `localStorage`
+  存明文令牌，从根上杜绝 XSS 脚本窃取令牌。新增 `POST /auth/logout` 由后端下发删除指令清除 Cookie
+  （JS 无法删除 HttpOnly Cookie）。`get_current_user` 优先取 Bearer 头、其次取 Cookie。
 - **密码哈希**：PBKDF2-HMAC-SHA256（10 万次迭代）+ 随机盐，存储格式 `pbkdf2$sha256$<iter>$<salt>$<dk>`，
   明文绝不下库；纯标准库实现，无第三方加密依赖。
 - **依赖注入取身份**：`get_current_user` 解析令牌返回用户对象，所有资源接口 `Depends` 它，
@@ -86,6 +94,7 @@ DB_PASSWORD=1234560
 | POST | `/api/v1/auth/register` | 注册（直接返回 token） |
 | POST | `/api/v1/auth/login` | 登录换取 JWT |
 | GET | `/api/v1/auth/me` | 当前登录用户 |
+| POST | `/api/v1/auth/logout` | 退出登录（清除 httpOnly Cookie） |
 | GET | `/api/v1/products` | 商品列表（含 SKU） |
 | POST | `/api/v1/products` | 创建商品 |
 | GET | `/api/v1/orders` | 订单列表（管理员见全部，买家仅见自己的订单） |
@@ -97,9 +106,10 @@ DB_PASSWORD=1234560
 | POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空） |
 | GET | `/api/v1/users` | 用户列表（active_only 过滤） |
 
-> **鉴权**：除 `/health` 与 `/auth/login`、`/auth/register` 外，所有接口都必须在请求头带
-> `Authorization: Bearer <token>`。订单归属、购物车、地址都取自令牌中的用户身份，
-> **不再信任请求体/路径里的 `user_id`**，从根上消除冒充他人下单、看他人地址的越权。
+> **鉴权**：除 `/health` 与 `/auth/login`、`/auth/register`、`/auth/logout` 外，所有接口都必须携带身份凭证
+> —— 优先 `Authorization: Bearer <token>`（API 客户端 / 测试），浏览器同源请求也可走 `HttpOnly` Cookie。
+> 订单归属、购物车、地址都取自令牌中的用户身份，**不再信任请求体/路径里的 `user_id`**，
+> 从根上消除冒充他人下单、看他人地址的越权。
 | POST | `/api/v1/users` | 创建用户 |
 | GET | `/api/v1/users/{id}` | 用户详情（含地址） |
 | PATCH | `/api/v1/users/{id}` | 更新用户 |
@@ -227,6 +237,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 
 - [x] 用户认证与鉴权（JWT + 依赖注入，身份取自令牌而非前端 `user_id`）
 - [x] 角色/权限（RBAC：管理员 / 普通买家，用户管理与订单流转推进仅管理员；买家仅见自己资料与订单）
+- [x] 跨域收紧 + JWT 写入 httpOnly Cookie（CORS 仅放行已知前端源 `settings.CORS_ORIGINS`，禁用 `*`；Cookie 不可被 JS 读取，防御 XSS 窃令牌；退出登录走 `POST /auth/logout`）
 - [ ] 购物车前端页面（后端 API 已完整并测试通过）
 - [ ] 商品 / 分类 / 用户的管理页面（目前前端只有订单页与设计器）
 - [ ] Alembic 迁移脚本（当前 `init_db.py` 用 `create_all` + 存量列补丁，模型变更后仍需 `--drop`）

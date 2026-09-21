@@ -1,15 +1,4 @@
 const BASE = '/api/v1'
-const TOKEN_KEY = 'flowmart_token'
-
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || ''
-}
-export function setToken(t) {
-  localStorage.setItem(TOKEN_KEY, t)
-}
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY)
-}
 
 // 未授权回调：由 App.vue 注入，用于 401 时跳回登录页
 let unauthorizedHandler = null
@@ -17,15 +6,13 @@ export function setUnauthorizedHandler(fn) {
   unauthorizedHandler = fn
 }
 
+// 令牌由后端写入 httpOnly Cookie，浏览器随 credentials: 'include' 自动携带；
+// 前端不再用 localStorage 存明文令牌，从根本上避免 XSS 窃令牌。
 async function request(path, options = {}) {
-  const token = getToken()
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
-  if (token) headers['Authorization'] = `Bearer ${token}`
-
-  const res = await fetch(BASE + path, { headers, ...options })
+  const res = await fetch(BASE + path, { headers, credentials: 'include', ...options })
   if (res.status === 401) {
-    // 令牌失效/缺失：清掉并回到登录页，避免卡在错误态
-    clearToken()
+    // 令牌失效/缺失：回到登录页，避免卡在错误态（Cookie 由后端 /auth/logout 清除）
     if (unauthorizedHandler) unauthorizedHandler()
     throw new Error('登录已失效，请重新登录')
   }
@@ -46,6 +33,7 @@ export const api = {
   register: (payload) =>
     request('/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/auth/me'),
+  logout: () => request('/auth/logout', { method: 'POST' }),
 
   // 订单
   listOrders: (status = '') => request(`/orders${status ? `?status=${status}` : ''}`),

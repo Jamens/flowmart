@@ -18,7 +18,7 @@ import secrets
 import time
 from typing import Any
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -116,19 +116,54 @@ def verify_password(pw: str, stored: str) -> bool:
 # ---------------- FastAPI 依赖 ----------------
 
 
+def set_auth_cookie(response: Response, token: str) -> None:
+    """把 JWT 写入 httpOnly Cookie：XSS 无法读取，防御令牌被盗。"""
+    response.set_cookie(
+        settings.JWT_COOKIE_NAME,
+        token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+def clear_auth_cookie(response: Response) -> None:
+    """退出登录：清除 httpOnly Cookie（前端 JS 无法删，必须由后端发指令）。
+
+    必须与 set_auth_cookie 的 secure/samesite 保持一致：否则生产环境
+    （COOKIE_SECURE=True、samesite=lax）下浏览器因属性不匹配而清不掉 Cookie，
+    导致「退出登录」形同虚设。
+    """
+    response.delete_cookie(
+        settings.JWT_COOKIE_NAME,
+        secure=settings.COOKIE_SECURE,
+        httponly=True,
+        samesite=settings.COOKIE_SAMESITE,
+    )
+
+
 def get_current_user(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_BEARER),
     db: Session = Depends(get_db),
 ) -> User:
-    """Bearer 令牌 → 当前用户对象。缺失/无效/禁用一律 401。
+    """Bearer 头或 httpOnly Cookie → 当前用户对象。缺失/无效/禁用一律 401。
 
-    所有需要身份的接口都 Depends 它；这样「当前用户」永远来自令牌，
-    前端传来的 user_id 不再被信任，从根上消除冒充他人下单/看地址的越权。
+    优先 Bearer 头（API 客户端 / 测试），浏览器同源请求走 Cookie 作为兜底；
+    这样「当前用户」永远来自令牌，前端传来的 user_id 不再被信任，
+    从根上消除冒充他人下单/看地址的越权。
     """
-    if creds is None or creds.scheme.lower() != "bearer":
+    # 优先 Bearer 头，其次 httpOnly Cookie
+    token = None
+    if creds is not None and creds.scheme.lower() == "bearer":
+        token = creds.credentials
+    else:
+        token = request.cookies.get(settings.JWT_COOKIE_NAME)
+    if not token:
         raise HTTPException(status_code=401, detail="未提供有效的身份凭证")
     try:
-        payload = decode_access_token(creds.credentials)
+        payload = decode_access_token(token)
     except JWTError as exc:
         raise HTTPException(status_code=401, detail=f"身份凭证无效：{exc}")
     uid = int(payload["sub"])
