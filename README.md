@@ -113,6 +113,7 @@ python -m alembic downgrade -1
   明文绝不下库；纯标准库实现，无第三方加密依赖。
 - **依赖注入取身份**：`get_current_user` 解析令牌返回用户对象，所有资源接口 `Depends` 它，
   因此「当前用户」恒来自令牌，前端无法伪造 `user_id` 冒充他人。
+  - 前端下单（`OrdersView.vue` 的 `submitCreate`）只传 `items`，不再带 `user_id`/`address_id` 死字段；即便误带后者后端也忽略，保持归属来源唯一。不传 `address_id` 时订单无收货快照（详情页优雅显示「-」）。
 - 登录失败（用户不存在 / 密码错误）统一返回 `401 用户名或密码错误`，不泄露哪些用户名已注册。
 - **生产必须设置 `SECRET_KEY`**：`config.SECRET_KEY` 仍为开发默认值时，非 debug 模式启动会直接报错，杜绝「 anyone can forge token 」。
 - **RBAC 角色权限（已落地）**：角色分「管理员 / 普通买家」，`User.is_admin` 字段 + `require_admin` 依赖闸门。

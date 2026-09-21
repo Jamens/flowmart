@@ -257,10 +257,9 @@ async function openCreate() {
 async function submitCreate() {
   if (!form.value.sku_id) return ElMessage.warning('请选择 SKU')
   try {
+    // 后端按当前登录用户归属订单（忽略请求体 user_id，防冒充）；不传 address_id 则订单无收货快照（新建订单弹窗暂未选地址）
     await api.createOrder({
-      user_id: 1, // 演示：固定为第一个用户，未实现登录鉴权
       items: [{ sku_id: form.value.sku_id, quantity: form.value.quantity }],
-      address_id: 1,
     })
     ElMessage.success('下单成功，流程已自动启动')
     createVisible.value = false
