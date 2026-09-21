@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base  # noqa: E402
-from app.core.security import hash_password  # noqa: E402
+from app.core.security import hash_password, ensure_admin_exists  # noqa: E402
 from app.models import ecommerce, workflow  # noqa: F401,E402  导入即注册表
 from app.models.ecommerce import User  # noqa: E402
 
@@ -92,6 +92,7 @@ def _backfill_admin(engine) -> None:
             admin.is_admin = True
             s.commit()
             print(f"[init_db] 已将 {settings.BOOTSTRAP_ADMIN} 设为管理员")
+        ensure_admin_exists(s)  # 收尾校验：零管理员则启动报错，避免静默锁死
 
 
 def main() -> None:

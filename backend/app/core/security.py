@@ -147,3 +147,21 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return current_user
+
+
+def ensure_admin_exists(db: Session) -> None:
+    """seed / 迁移收尾校验：系统中若无任何管理员，启动即报错，避免「谁都不是管理员」静默锁死。
+
+    与 BOOTSTRAP_ADMIN 配合：即便配置写错了名字（该用户没被 seed 进去），
+    也能在启动时暴露，而不是让所有管理接口悄悄不可用。
+    """
+    from sqlalchemy import func, select
+
+    admin_count = db.execute(
+        select(func.count()).select_from(User).where(User.is_admin.is_(True))
+    ).scalar()
+    if not admin_count:
+        raise RuntimeError(
+            "系统中没有任何管理员账号：请确认 BOOTSTRAP_ADMIN 指向的用户已被创建，"
+            "否则所有管理接口将无法使用、系统陷入锁死。"
+        )

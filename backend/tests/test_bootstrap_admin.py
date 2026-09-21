@@ -46,3 +46,30 @@ def test_padded_bootstrap_admin_is_normalized(monkeypatch):
     monkeypatch.setenv("DEBUG", "True")
     monkeypatch.setenv("BOOTSTRAP_ADMIN", " zhangsan ")
     assert Settings().BOOTSTRAP_ADMIN == "zhangsan"
+
+
+def test_ensure_admin_exists_raises_when_zero(db):
+    """系统中无任何管理员时，收尾校验必须启动报错，避免「谁都不是管理员」静默锁死。"""
+    from app.core.security import ensure_admin_exists, hash_password
+    from app.models.ecommerce import User
+
+    db.add(
+        User(username="buyer_only", nickname="买家", phone="13800000009",
+             password_hash=hash_password("123456"), is_admin=False)
+    )
+    db.commit()
+    with pytest.raises(RuntimeError):
+        ensure_admin_exists(db)
+
+
+def test_ensure_admin_exists_ok_with_admin(db):
+    """系统里存在管理员时，收尾校验不应报错。"""
+    from app.core.security import ensure_admin_exists, hash_password
+    from app.models.ecommerce import User
+
+    db.add(
+        User(username="has_admin", nickname="管理员", phone="13800000008",
+             password_hash=hash_password("123456"), is_admin=True)
+    )
+    db.commit()
+    ensure_admin_exists(db)  # 不抛

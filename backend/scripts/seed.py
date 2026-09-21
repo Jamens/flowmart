@@ -19,7 +19,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from sqlalchemy import select  # noqa: E402
 
 from app.core.database import SessionLocal  # noqa: E402
-from app.core.security import hash_password  # noqa: E402
+from app.core.security import hash_password, ensure_admin_exists  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.models.ecommerce import (  # noqa: E402
     Address,
@@ -209,6 +209,7 @@ def seed_users(db) -> tuple[int, int, int]:
         db.flush()
     addr_id = addr.id
     db.commit()
+    ensure_admin_exists(db)  # 收尾校验：零管理员则启动报错，避免静默锁死
     print(f"[seed] 用户就绪：{len(users)} 人")
     return users["zhangsan"], users["lisi"], addr_id
 
