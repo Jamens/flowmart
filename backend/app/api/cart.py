@@ -220,9 +220,11 @@ def checkout(
             auto_commit=False,
         )
     except (ValueError, WorkflowError) as exc:
-        # 库存不足、SKU 下架、流程未发布等，都要回滚并转成客户端可读的错误
+        # 库存不足、SKU 下架、流程未发布等，都要回滚并转成客户端可读的错误；
+        # 地址相关的越权/不存在统一 404（与 orders.py 约定一致），不泄露目标是否存在
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        status = 404 if "收货地址" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
 
     try:
         for i in items:
