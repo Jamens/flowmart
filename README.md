@@ -288,7 +288,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 110 passed）
+- [x] 测试（pytest 全量 117 passed）
 
 ### ❌ 待实现
 
@@ -298,7 +298,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 用户管理页面（`UsersView.vue`：用户列表/新建/改资料/软禁用 + 本人收货地址增删改；禁用为软删除且不能禁用当前管理员）
 - [x] Alembic 迁移脚本（初始迁移已生成并与模型一致；`alembic upgrade head` / `downgrade base`；`tests/test_migrations.py` 守住「改模型忘写迁移」）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本，无版本历史 / 回滚）
-- [ ] JWT 刷新 / 续期机制（当前令牌过期即需重新登录）
+- [x] JWT 刷新 / 续期机制（短期访问令牌 30 分钟 + 长期刷新令牌 7 天写独立 httpOnly Cookie；POST /auth/refresh 静默换发访问令牌；前端 401 自动刷新并重试一次；access/refresh 令牌 type 隔离防混用）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [ ] 登录限流（无防暴力破解的速率限制）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
