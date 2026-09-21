@@ -241,5 +241,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [ ] 购物车前端页面（后端 API 已完整并测试通过）
 - [ ] 商品 / 分类 / 用户的管理页面（目前前端只有订单页与设计器）
 - [ ] Alembic 迁移脚本（当前 `init_db.py` 用 `create_all` + 存量列补丁，模型变更后仍需 `--drop`）
-- [ ] 库存并发控制（高并发下需要行锁或乐观锁）
+- [x] 库存并发控制（DB 层原子条件 UPDATE：`UPDATE ... WHERE stock >= qty`，靠 `rowcount==0` 判定不足；取消/退款归还用 `stock = stock + qty` 原子累加，杜绝 TOCTOU 超卖与并发丢失更新；`tests/test_inventory_concurrency.py` 多线程复验）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本）

@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.ecommerce import (
@@ -62,11 +62,18 @@ def _effect_create_payment(svc: "OrderService", order: Order) -> None:
 
 
 def _effect_return_stock(svc: "OrderService", order: Order) -> None:
-    """归还库存：取消与退款都必须调用，否则库存会凭空消失。"""
+    """归还库存：取消与退款都必须调用，否则库存会凭空消失。
+
+    用原子 UPDATE ... SET stock = stock + qty 完成，避免「先读到内存再加回去」的
+    丢失更新（lost update）：若两笔归还并发发生，读-改-写会出现一笔加成的库存被
+    另一笔覆盖。DB 层直接累加则天然串行、无丢失。
+    """
     for item in order.items:
-        sku = svc.db.get(Sku, item.sku_id)
-        if sku:
-            sku.stock += item.quantity
+        svc.db.execute(
+            update(Sku)
+            .where(Sku.id == item.sku_id)
+            .values(stock=Sku.stock + item.quantity)
+        )
 
 
 def _effect_mark_refunded(svc: "OrderService", order: Order) -> None:
@@ -140,10 +147,15 @@ class OrderService:
 
             sku = self.db.get(Sku, sku_id)
             if sku is None:
+                self.db.rollback()
                 raise ValueError(f"SKU {sku_id} 不存在")
             if sku.status != "on_sale":
+                self.db.rollback()
                 raise ValueError(f"SKU {sku_id} 已下架")
+            # 友好预检：非原子，仅用于提前拦截并给出中文库存不足提示。
+            # 真正的扣减见下方原子 UPDATE —— 只有它才能杜绝并发超卖。
             if sku.stock < quantity:
+                self.db.rollback()
                 raise ValueError(
                     f"SKU {sku_id} 库存不足（剩 {sku.stock}，需要 {quantity}）"
                 )
@@ -162,7 +174,27 @@ class OrderService:
                     subtotal=subtotal,
                 )
             )
-            sku.stock -= quantity
+
+            # 原子扣减：在数据库层用 UPDATE ... WHERE stock >= quantity 完成，
+            # 用 rowcount 判断是否真的扣成功。这样即使两个并发请求都读到旧库存、
+            # 都通过上面的预检，也只有一行 UPDATE 能拿到 rowcount==1，
+            # 另一个 rowcount==0 即判定库存不足 —— 彻底消除「读-改-写」TOCTOU 超卖。
+            result = self.db.execute(
+                update(Sku)
+                .where(Sku.id == sku_id, Sku.stock >= quantity)
+                .values(stock=Sku.stock - quantity)
+            )
+            if result.rowcount == 0:
+                # 扣减失败（库存真不够或被并发抢光）：回滚本次事务，
+                # 撤销前面 SKU 已执行的原子扣减，避免留下半截状态。
+                # 注意 get_db 只 close 不 rollback，这里必须自己 rollback。
+                self.db.rollback()
+                real_stock = self.db.execute(
+                    select(Sku.stock).where(Sku.id == sku_id)
+                ).scalar()
+                raise ValueError(
+                    f"SKU {sku_id} 库存不足（剩 {real_stock}，需要 {quantity}）"
+                )
 
         snapshot = ""
         if address:
