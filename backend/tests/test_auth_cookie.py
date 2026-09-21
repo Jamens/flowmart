@@ -27,14 +27,17 @@ def test_request_via_cookie_authenticates(raw_client):
 
 
 def test_cors_echoes_configured_origin(raw_client):
-    r = raw_client.get("/api/v1/health", headers={"Origin": "http://127.0.0.1:5173"})
+    # 必须用真实存在的 /health 端点：若误用 404 路径，CORS 中间件对 404 也回显头会掩盖盲区
+    r = raw_client.get("/health", headers={"Origin": "http://127.0.0.1:5173"})
+    assert r.status_code == 200  # 端点确实存在，CORS 头才有意义
     assert r.headers.get("access-control-allow-origin") == "http://127.0.0.1:5173"
     assert r.headers.get("access-control-allow-credentials") == "true"
 
 
 def test_cors_rejects_unknown_origin(raw_client):
-    r = raw_client.get("/api/v1/health", headers={"Origin": "http://evil.example.com"})
-    # 未配置的源不应被回显，杜绝任意站点带凭据跨域调用
+    # 用真实存在的 /health 端点；未知源不应被回显，杜绝任意站点带凭据跨域调用
+    r = raw_client.get("/health", headers={"Origin": "http://evil.example.com"})
+    assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") != "http://evil.example.com"
 
 
