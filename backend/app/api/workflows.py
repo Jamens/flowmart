@@ -6,7 +6,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -84,8 +84,16 @@ def _graph(definition: WorkflowDefinition, db: Session) -> dict:
 
 
 @router.get("/definitions", summary="流程定义列表")
-def list_definitions(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    defs = db.execute(select(WorkflowDefinition).order_by(WorkflowDefinition.id)).scalars().all()
+def list_definitions(
+    code: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """流程定义列表。?code= 可按业务 code 过滤（同一 code 会有多个版本行）。"""
+    stmt = select(WorkflowDefinition)
+    if code:
+        stmt = stmt.where(WorkflowDefinition.code == code)
+    defs = db.execute(stmt.order_by(WorkflowDefinition.id)).scalars().all()
     return [
         {"id": d.id, "code": d.code, "name": d.name, "version": d.version, "status": d.status}
         for d in defs
@@ -116,6 +124,34 @@ def get_definition_by_code(
     if definition is None:
         raise HTTPException(status_code=404, detail=f"流程 `{code}` 没有已发布版本")
     return _graph(definition, db)
+
+
+@router.get("/definitions/code/{code}/versions", summary="流程版本历史")
+def list_versions(
+    code: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """同一 code 的所有版本（含 draft/published/archived），按 version 倒序。
+
+    用于前端「版本列表」与「回滚」入口：回滚 = 把某个旧版本 publish（publish 会自动降级其它 published 版本）。
+    """
+    defs = db.execute(
+        select(WorkflowDefinition)
+        .where(WorkflowDefinition.code == code)
+        .order_by(WorkflowDefinition.version.desc())
+    ).scalars().all()
+    if not defs:
+        raise HTTPException(status_code=404, detail=f"流程 `{code}` 不存在")
+    return [
+        {
+            "id": d.id,
+            "version": d.version,
+            "status": d.status,
+            "name": d.name,
+            "created_at": d.created_at,
+            "updated_at": d.updated_at,
+        }
+        for d in defs
+    ]
 
 
 @router.post("/definitions", status_code=201, summary="创建流程定义")
@@ -186,9 +222,81 @@ def publish_definition(definition_id: int, current_user: User = Depends(get_curr
         # 发布前校验：把问题挡在运行之前，而不是等订单流转时才炸
         raise HTTPException(status_code=400, detail={"message": "流程校验未通过", "errors": errors})
 
+    # 保证全局唯一 published：把同 code 的其它已发布版本降级为 archived。
+    # 在途实例按 definition_id 钉死在各自版本上，不受此影响。
+    siblings = db.execute(
+        select(WorkflowDefinition).where(
+            WorkflowDefinition.code == definition.code,
+            WorkflowDefinition.status == "published",
+            WorkflowDefinition.id != definition.id,
+        )
+    ).scalars().all()
+    for sib in siblings:
+        sib.status = "archived"
+
     definition.status = "published"
     db.commit()
-    return {"id": definition.id, "status": definition.status}
+    return {"id": definition.id, "status": definition.status, "demoted": [s.id for s in siblings]}
+
+
+@router.post("/definitions/{definition_id}/versions", status_code=201, summary="派生新版本（克隆图）")
+def fork_version(
+    definition_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """从任意版本派生一个新草稿版本：克隆节点与流转边，version = max(同 code 版本) + 1。
+
+    典型用途：
+    - 在已发布流程上迭代（clone 后改图、再 publish，旧版本自动归档）
+    - 回滚改造：clone 一个旧版本 → 改 → publish（等价于「基于旧版本出新版」）
+    在途实例不受影响——它们钉死在各自的 definition_id 上。
+    """
+    source = db.get(WorkflowDefinition, definition_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="流程定义不存在")
+
+    # 同一 code 下取最大版本号，避免重复（并发创建时取 DB 当前最大值，非内存计数）
+    max_version = db.execute(
+        select(func.max(WorkflowDefinition.version)).where(WorkflowDefinition.code == source.code)
+    ).scalar()
+    next_version = (max_version or 0) + 1
+
+    new_def = WorkflowDefinition(
+        code=source.code, name=source.name, description=source.description,
+        version=next_version, status="draft",
+    )
+    db.add(new_def)
+    db.flush()
+
+    src_nodes = db.execute(
+        select(WorkflowNode).where(WorkflowNode.definition_id == source.id)
+    ).scalars().all()
+    src_trans = db.execute(
+        select(WorkflowTransition).where(WorkflowTransition.definition_id == source.id)
+    ).scalars().all()
+    db.add_all(
+        [
+            WorkflowNode(
+                definition_id=new_def.id, key=n.key, name=n.name,
+                node_type=n.node_type, x=n.x, y=n.y, meta=n.meta,
+            )
+            for n in src_nodes
+        ]
+    )
+    db.add_all(
+        [
+            WorkflowTransition(
+                definition_id=new_def.id, from_node_key=t.from_node_key,
+                to_node_key=t.to_node_key, event=t.event, condition_expr=t.condition_expr,
+                priority=t.priority, description=t.description,
+            )
+            for t in src_trans
+        ]
+    )
+    db.commit()
+    return {
+        "id": new_def.id, "code": new_def.code, "version": new_def.version,
+        "status": new_def.status, "source_id": source.id, "cloned_nodes": len(src_nodes),
+    }
 
 
 @router.delete("/definitions/{definition_id}", summary="归档流程定义")

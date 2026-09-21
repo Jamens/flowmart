@@ -94,6 +94,17 @@ python -m alembic downgrade -1
 - 到达 end 节点自动将实例置为 finished
 - 非法流转显式报错，不静默忽略
 
+### 流程定义版本管理（`app/api/workflows.py`）
+
+- 同一 `code` 可有多版本（`version` 递增），但同一时刻**全局唯一 `published`** 生效
+- `POST /api/v1/workflows/definitions/{id}/versions` 派生新草案版本：克隆源定义的节点与流转边，`version = max(同 code 版本) + 1`
+- `GET /api/v1/workflows/definitions/code/{code}/versions` 查版本历史（按 version 倒序，含 draft/published/archived）
+- `POST .../publish` 发布时自动把同 `code` 的其它 `published` 版本降级为 `archived`，**保证唯一 published**
+- 回滚 = 把某个旧版本重新 `publish`（旧版本重新生效，新版本被降级）
+- `GET /api/v1/workflows/definitions?code=` 支持按业务 code 过滤版本行
+- **在途实例隔离**：`WorkflowInstance.definition_id` 钉死各自版本，发布新版本降级旧版本后，正在跑的实例依旧用其 `definition_id` 对应的图继续流转，不受影响
+- 无需数据库迁移：模型原本就支持 `code + version + status` 多版本，版本管理是纯 API/行为变更
+
 ### 订单服务（`app/services/order_service.py`）
 
 - 创建订单：校验库存 → 算金额 → 扣库存 → 启动流程 → 推进到待付款，**同一事务**
@@ -163,10 +174,12 @@ python -m alembic downgrade -1
 | DELETE | `/api/v1/categories/{id}` | 删除分类（有商品时拒绝） |
 | GET | `/api/v1/orders/{id}` | 订单详情，含明细、可执行动作、流转时间线 |
 | POST | `/api/v1/orders/{id}/actions/{event}` | 推进流转（pay/ship/confirm/cancel/refund/approve/reject） |
-| GET | `/api/v1/workflows/definitions` | 流程定义列表 |
+| GET | `/api/v1/workflows/definitions` | 流程定义列表（`?code=` 按业务 code 过滤版本行） |
 | GET | `/api/v1/workflows/definitions/{id}` | 流程定义图（设计器加载用） |
 | PUT | `/api/v1/workflows/definitions/{id}` | 更新流程（全量替换节点与流转边） |
-| POST | `/api/v1/workflows/definitions/{id}/publish` | 发布前校验（必须有 start/end、无悬空引用） |
+| POST | `/api/v1/workflows/definitions/{id}/versions` | 派生新版本（克隆图，version = max+1） |
+| GET | `/api/v1/workflows/definitions/code/{code}/versions` | 版本历史（按 version 倒序） |
+| POST | `/api/v1/workflows/definitions/{id}/publish` | 发布前校验（必须有 start/end、无悬空引用）；发布时降级同 code 其它 published 版本 |
 | GET | `/api/v1/admin/db/tables` | 数据库表浏览（只读） |
 
 ### 购物车（`backend/app/api/cart.py`）
@@ -291,7 +304,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 124 passed）
+- [x] 测试（pytest 全量 134 passed）
 
 ### ❌ 待实现
 
@@ -300,7 +313,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 分类管理页面（`CategoriesView.vue`：树形层级、商品数、新建/编辑/删除、加子分类；有子分类或仍被商品引用时后端拒绝删除）
 - [x] 用户管理页面（`UsersView.vue`：用户列表/新建/改资料/软禁用 + 本人收货地址增删改；禁用为软删除且不能禁用当前管理员）
 - [x] Alembic 迁移脚本（初始迁移已生成并与模型一致；`alembic upgrade head` / `downgrade base`；`tests/test_migrations.py` 守住「改模型忘写迁移」）
-- [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本，无版本历史 / 回滚）
+- [x] 流程定义版本管理（同 code 多版本；POST .../versions 派生新草案克隆图、GET .../code/{code}/versions 版本历史；发布保证唯一 published 并自动降级旧版本；回滚=重新发布旧版本）
 - [x] JWT 刷新 / 续期机制（短期访问令牌 30 分钟 + 长期刷新令牌 7 天写独立 httpOnly Cookie；POST /auth/refresh 静默换发访问令牌；前端 401 自动刷新并重试一次；access/refresh 令牌 type 隔离防混用）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
