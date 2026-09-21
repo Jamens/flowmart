@@ -77,6 +77,29 @@ def test_non_admin_cannot_disable_other_user(raw_client, db):
     assert raw_client.delete(f"/api/v1/users/{a['id']}", headers=h).status_code == 403
 
 
+def test_admin_cannot_disable_self_via_patch(client):
+    """管理员不能通过 PATCH 禁用自己，与 DELETE 闸门统一，避免自己把自己锁死。"""
+    r = client.patch(f"/api/v1/users/{client.user.id}", json={"is_active": False})
+    assert r.status_code == 400
+
+
+def test_admin_can_disable_buyer_via_patch(client, db):
+    """管理员禁用普通买家（非本人）仍允许，与 delete_user 行为一致。"""
+    from app.core.security import hash_password
+    from app.models.ecommerce import User
+
+    victim = User(
+        username="tbd_buyer", nickname="待禁用", phone="13800000006",
+        password_hash=hash_password("123456"), is_admin=False,
+    )
+    db.add(victim)
+    db.commit()
+    db.refresh(victim)
+    r = client.patch(f"/api/v1/users/{victim.id}", json={"is_active": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["is_active"] is False
+
+
 def test_self_can_update_own_profile(raw_client, db):
     a = _register(raw_client, "rbacSelf")
     h = _auth(raw_client, _login_token(raw_client, "rbacSelf"))

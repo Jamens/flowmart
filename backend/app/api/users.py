@@ -194,6 +194,12 @@ def update_user(
         allowed = ("nickname", "phone", "is_active")
     else:
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 与 DELETE 闸门统一：不能禁用当前登录的管理员账号（避免自己把自己锁死）。
+    # 禁用其他管理员仍允许，与 delete_user 行为保持一致（仅保护当前管理员）。
+    if u.is_admin and current_user.id == user_id and payload.is_active is False:
+        raise HTTPException(status_code=400, detail="不能禁用当前登录的管理员账号")
+
     for field in allowed:
         value = getattr(payload, field)
         if value is not None:
