@@ -2,7 +2,7 @@
   <div>
     <!-- 工具栏 -->
     <div class="toolbar">
-      <el-select v-model="status" placeholder="按状态筛选" clearable @change="load" style="width: 180px">
+      <el-select v-model="status" placeholder="按状态筛选" clearable @change="onFilterChange" style="width: 180px">
         <el-option v-for="(label, key) in STATUS" :key="key" :label="label" :value="key" />
       </el-select>
       <el-button @click="load">刷新</el-button>
@@ -31,6 +31,17 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-pagination
+      class="pager"
+      layout="total, sizes, prev, pager, next"
+      :total="total"
+      v-model:current-page="page"
+      v-model:page-size="pageSize"
+      :page-sizes="[10, 20, 50]"
+      @current-change="load"
+      @size-change="onSizeChange"
+    />
 
     <!-- 订单详情：明细 + 可执行流转 + 流转时间线 -->
     <el-drawer v-model="drawer" :title="`订单 ${detail?.order_no || ''}`" size="46%">
@@ -142,6 +153,9 @@ const EVENT = {
 const list = ref([])
 const status = ref('')
 const loading = ref(false)
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 const drawer = ref(false)
 const detail = ref(null)
 const createVisible = ref(false)
@@ -158,12 +172,29 @@ function tagType(s) {
 async function load() {
   loading.value = true
   try {
-    list.value = await api.listOrders(status.value)
+    // 列表接口返回 {items, total}：total 是过滤后的总数，与当前页无关
+    const res = await api.listOrders({
+      status: status.value,
+      limit: pageSize.value,
+      offset: (page.value - 1) * pageSize.value,
+    })
+    list.value = res.items
+    total.value = res.total
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
     loading.value = false
   }
+}
+
+function onFilterChange() {
+  page.value = 1 // 换筛选条件必须回到第一页，否则会停在一个越界的空页上
+  load()
+}
+
+function onSizeChange() {
+  page.value = 1
+  load()
 }
 
 async function showDetail(row) {
@@ -189,7 +220,8 @@ async function fire(e) {
 async function openCreate() {
   form.value = { sku_id: null, quantity: 1 }
   if (!skuOptions.value.length) {
-    const products = await api.listProducts()
+    // 下拉框要全量商品（不分页），用 listAllProducts 而不是分页的 listProducts
+    const products = await api.listAllProducts()
     skuOptions.value = products.flatMap((p) =>
       p.skus.map((s) => ({ id: s.id, spec: s.spec, price: s.price, stock: s.stock, productName: p.name }))
     )
@@ -221,6 +253,10 @@ onMounted(load)
   display: flex;
   gap: 10px;
   margin-bottom: 14px;
+}
+.pager {
+  margin-top: 14px;
+  justify-content: flex-end;
 }
 h4 {
   margin: 18px 0 8px;

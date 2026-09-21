@@ -1,13 +1,25 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-checkbox v-model="activeOnly" @change="load">只看启用中</el-checkbox>
+      <!-- 切换「只看启用中」等于换筛选条件，必须回到第一页，否则会停在越界空页 -->
+      <el-checkbox v-model="activeOnly" @change="onFilterChange">只看启用中</el-checkbox>
       <el-button @click="load">刷新</el-button>
       <el-button type="primary" @click="openCreate">新建用户</el-button>
       <!-- 地址管理对所有人开放（后端允许管理自己的地址），
            不能只挂在用户行上 —— 列表本身仅管理员可见，否则普通用户永远进不去 -->
       <el-button :disabled="!myId" @click="openAddresses({ id: myId })">我的收货地址</el-button>
     </div>
+
+    <el-pagination
+      class="pager"
+      layout="total, sizes, prev, pager, next"
+      :total="total"
+      v-model:current-page="page"
+      v-model:page-size="pageSize"
+      :page-sizes="[10, 20, 50]"
+      @current-change="load"
+      @size-change="onSizeChange"
+    />
 
     <el-table :data="list" stripe v-loading="loading">
       <el-table-column prop="id" label="ID" width="70" />
@@ -130,6 +142,9 @@ import { api } from '../api'
 const list = ref([])
 const loading = ref(false)
 const activeOnly = ref(false)
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 const myId = ref(null)
 
 const userVisible = ref(false)
@@ -157,13 +172,30 @@ function emptyAddr() {
 async function load() {
   loading.value = true
   try {
-    list.value = await api.listUsers(activeOnly.value)
+    // 列表接口返回 {items, total}：total 是过滤后的总数，与当前页无关
+    const res = await api.listUsers({
+      active_only: activeOnly.value,
+      limit: pageSize.value,
+      offset: (page.value - 1) * pageSize.value,
+    })
+    list.value = res.items
+    total.value = res.total
   } catch (e) {
     // 非管理员会被 403，如实提示而不是静默空列表
     ElMessage.error(e.message)
   } finally {
     loading.value = false
   }
+}
+
+function onFilterChange() {
+  page.value = 1 // 换筛选条件回到第一页，避免停在越界空页
+  load()
+}
+
+function onSizeChange() {
+  page.value = 1
+  load()
 }
 
 async function loadMe() {
@@ -319,6 +351,10 @@ onMounted(async () => {
   gap: 12px;
   margin-bottom: 14px;
   flex-wrap: wrap;
+}
+.pager {
+  margin: 14px 0;
+  justify-content: flex-end;
 }
 .addr-table {
   margin-top: 12px;

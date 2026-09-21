@@ -17,7 +17,8 @@ def create_user(client, username, **kw):
 
 def test_create_and_list_users(client):
     assert create_user(client, "u1", nickname="用户一").status_code == 201
-    users = client.get("/api/v1/users").json()
+    # 列表接口返回 {"items": [...], "total": N}
+    users = client.get("/api/v1/users").json()["items"]
     assert any(u["username"] == "u1" for u in users)
 
 
@@ -37,7 +38,8 @@ def test_delete_user_is_soft(client):
     # 用户仍可查到，只是被标记禁用
     assert client.get(f"/api/v1/users/{uid}").json()["is_active"] is False
     # active_only 过滤后不再出现
-    assert all(u["id"] != uid for u in client.get("/api/v1/users?active_only=true").json())
+    rows = client.get("/api/v1/users?active_only=true").json()["items"]
+    assert all(u["id"] != uid for u in rows)
 
 
 def test_update_user(client):

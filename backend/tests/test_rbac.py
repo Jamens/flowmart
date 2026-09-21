@@ -139,11 +139,11 @@ def test_buyer_sees_own_orders_only(raw_client, db, order_flow):
     raw_client.post("/api/v1/orders", headers=h_a, json={"items": [{"sku_id": sku.id, "quantity": 1}]})
     raw_client.post("/api/v1/orders", headers=h_b, json={"items": [{"sku_id": sku.id, "quantity": 1}]})
 
-    ra = raw_client.get("/api/v1/orders", headers=h_a).json()
+    ra = raw_client.get("/api/v1/orders", headers=h_a).json()["items"]
     assert len(ra) == 2
     assert all(o["user_id"] == a["id"] for o in ra)
 
-    rb = raw_client.get("/api/v1/orders", headers=h_b).json()
+    rb = raw_client.get("/api/v1/orders", headers=h_b).json()["items"]
     assert len(rb) == 1
     assert rb[0]["user_id"] == b["id"]
 

@@ -47,8 +47,13 @@ export const api = {
   me: () => request('/auth/me'),
   logout: () => request('/auth/logout', { method: 'POST' }),
 
-  // 订单
-  listOrders: (status = '') => request(`/orders${status ? `?status=${status}` : ''}`),
+  // 订单（列表接口统一返回 {items, total}；不带 limit 即不分页返回全部）
+  listOrders: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== '' && v != null)
+    ).toString()
+    return request(`/orders${qs ? `?${qs}` : ''}`)
+  },
   getOrder: (id) => request(`/orders/${id}`),
   createOrder: (payload) => request('/orders', { method: 'POST', body: JSON.stringify(payload) }),
   fireEvent: (id, event, payload) =>
@@ -69,6 +74,9 @@ export const api = {
     request('/cart/checkout', { method: 'POST', body: JSON.stringify(payload || {}) }),
 
   // 商品
+  // 下拉框要的是全量在售商品：不带 limit 即不分页，直接返回 items 数组，
+  // 免得每个调用点都得写一遍 .items
+  listAllProducts: async () => (await request('/products')).items,
   // 只丢弃 null/undefined，**空字符串必须保留并发出去**：
   // 后端 status 的默认值是 "on_sale"，若省略该参数，FastAPI 会套用默认值把下架商品筛掉，
   // 于是「全部（含下架）」会退化成「仅在售」。显式发 `status=` 才能让后端 `if status:` 为假。
@@ -108,8 +116,12 @@ export const api = {
     request(`/users/${userId}/addresses/${addressId}`, { method: 'DELETE' }),
 
   // 用户管理（列表/创建/禁用仅管理员；改资料本人或管理员）
-  listUsers: (activeOnly = false) =>
-    request(`/users${activeOnly ? '?active_only=true' : ''}`),
+  listUsers: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString()
+    return request(`/users${qs ? `?${qs}` : ''}`)
+  },
   createUser: (payload) => request('/users', { method: 'POST', body: JSON.stringify(payload) }),
   updateUser: (id, payload) =>
     request(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),

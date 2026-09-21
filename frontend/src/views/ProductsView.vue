@@ -6,13 +6,13 @@
         placeholder="按商品名搜索"
         clearable
         style="width: 220px"
-        @keyup.enter="load"
-        @clear="load"
+        @keyup.enter="onFilterChange"
+        @clear="onFilterChange"
       />
       <!-- 传空 status = 不筛选，这样下架商品也能在管理页看到并重新上架。
            注意必须「发出」空值而不是省略参数：后端 status 默认值是 on_sale，
            省略会被套用默认值，把下架商品筛掉（见 api.js listProducts）。 -->
-      <el-select v-model="status" style="width: 150px" @change="load">
+      <el-select v-model="status" style="width: 150px" @change="onFilterChange">
         <el-option label="全部（含下架）" value="" />
         <el-option label="仅在售" value="on_sale" />
         <el-option label="仅下架" value="off_shelf" />
@@ -71,6 +71,17 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-pagination
+      class="pager"
+      layout="total, sizes, prev, pager, next"
+      :total="total"
+      v-model:current-page="page"
+      v-model:page-size="pageSize"
+      :page-sizes="[10, 20, 50]"
+      @current-change="load"
+      @size-change="onSizeChange"
+    />
 
     <div v-if="!loading && !list.length" class="empty">暂无商品</div>
 
@@ -172,6 +183,9 @@ import { api } from '../api'
 
 const list = ref([])
 const loading = ref(false)
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 const keyword = ref('')
 // 空字符串 = 不按状态筛选（后端 `if status:` 为假则不加 where）。
 // 必须显式发出该空值，省略参数会被后端默认值 on_sale 套用。
@@ -193,12 +207,29 @@ function emptyForm() {
 async function load() {
   loading.value = true
   try {
-    list.value = await api.listProducts({ keyword: keyword.value, status: status.value })
+    const res = await api.listProducts({
+      keyword: keyword.value,
+      status: status.value,
+      limit: pageSize.value,
+      offset: (page.value - 1) * pageSize.value,
+    })
+    list.value = res.items
+    total.value = res.total
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
     loading.value = false
   }
+}
+
+function onFilterChange() {
+  page.value = 1 // 换筛选条件回到第一页，避免停在越界空页
+  load()
+}
+
+function onSizeChange() {
+  page.value = 1
+  load()
 }
 
 async function loadCategories() {

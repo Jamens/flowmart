@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
+from app.core.pagination import apply_pagination, total_count
 from app.core.security import get_current_user, require_admin
 from app.models.ecommerce import Order, User
 from app.services.order_service import OrderService
@@ -79,6 +80,9 @@ def _serialize(order: Order, svc: OrderService) -> dict:
 @router.get("", summary="订单列表（管理员见全部 / 买家仅见自己）")
 def list_orders(
     status: str = "",
+    # limit=0 表示不分页（返回全部），保证既有调用方行为不变
+    limit: int = 0,
+    offset: int = 0,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -88,9 +92,16 @@ def list_orders(
     # 非管理员只能看自己的订单，避免任意买家遍历全平台订单（PII / 越权）
     if not current_user.is_admin:
         stmt = stmt.where(Order.user_id == current_user.id)
-    orders = db.execute(stmt.order_by(Order.id.desc())).scalars().unique().all()
+    # 先按同一套过滤条件统计总数，再分页 —— 两处共用同一个 stmt，不会条件漂移
+    total = total_count(db, stmt)
+    orders = (
+        db.execute(apply_pagination(stmt.order_by(Order.id.desc()), limit, offset))
+        .scalars()
+        .unique()
+        .all()
+    )
     svc = OrderService(db)
-    return [_serialize(o, svc) for o in orders]
+    return {"items": [_serialize(o, svc) for o in orders], "total": total}
 
 
 @router.get("/{order_id}", summary="订单详情")

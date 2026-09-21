@@ -152,6 +152,42 @@ def test_list_categories_requires_auth(raw_client):
     assert raw_client.get("/api/v1/categories/tree").status_code == 401
 
 
+def test_list_pagination_returns_total_and_slice(client, sku):
+    """分页语义：total 是过滤后的总数，不受 limit/offset 影响；items 是当前切片。"""
+    for _ in range(3):
+        r = client.post(
+            "/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]}
+        )
+        assert r.status_code == 201, r.text
+
+    # 不带 limit = 不分页，返回全部（既有调用方行为不变）
+    all_rows = client.get("/api/v1/orders").json()
+    assert all_rows["total"] == 3
+    assert len(all_rows["items"]) == 3
+
+    page1 = client.get("/api/v1/orders?limit=2").json()
+    assert page1["total"] == 3
+    assert len(page1["items"]) == 2
+
+    page2 = client.get("/api/v1/orders?limit=2&offset=2").json()
+    assert page2["total"] == 3
+    assert len(page2["items"]) == 1
+
+
+def test_products_list_returns_envelope(client):
+    """商品列表返回 {items, total} 信封。
+
+    注意：list_products 的 response_model 必须匹配信封结构，否则 FastAPI 会把
+    字典当裸列表校验、在生产环境抛 ResponseValidationError（500）。这条测试就是
+    用来守住「改了返回结构却忘了改 response_model」这类回归。
+    """
+    r = client.get("/api/v1/products")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "items" in body and "total" in body
+    assert isinstance(body["items"], list)
+
+
 def test_workflow_definition_endpoints_require_auth(raw_client):
     """流程定义直接驱动订单状态机，创建/修改/归档绝不能匿名调用。
 

@@ -297,7 +297,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] Alembic 迁移脚本（初始迁移已生成并与模型一致；`alembic upgrade head` / `downgrade base`；`tests/test_migrations.py` 守住「改模型忘写迁移」）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本，无版本历史 / 回滚）
 - [ ] JWT 刷新 / 续期机制（当前令牌过期即需重新登录）
-- [ ] 列表接口分页（orders / products / users 目前全量返回，数据量大时需分页）
+- [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [ ] 登录限流（无防暴力破解的速率限制）
 - [ ] 订单搜索 / 筛选增强（目前仅按 `status` 筛选，无关键词 / 时间范围）
 - [ ] （可选）邮箱 / 手机验证

@@ -131,7 +131,8 @@ async function loadSkuOptions(force = false) {
   // force=true 用于加购后刷新库存上限；默认有缓存就直接用
   if (skuOptions.value.length && !force) return
   try {
-    const products = await api.listProducts()
+    // 加购下拉要全量在售商品：用不分页的 listAllProducts
+    const products = await api.listAllProducts()
     skuOptions.value = products.flatMap((p) =>
       // 只列在售 SKU：后端对下架 SKU 会直接 400「已下架」，
       // 与其让用户选了再报错，不如一开始就不列出来

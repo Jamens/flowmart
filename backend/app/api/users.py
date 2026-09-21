@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.pagination import apply_pagination, total_count
 from app.core.security import get_current_user, require_admin
 from app.models.ecommerce import Address, User
 
@@ -112,23 +113,30 @@ def _set_default_address(db: Session, user_id: int, target: Address) -> None:
 @router.get("", summary="用户列表（仅管理员）")
 def list_users(
     active_only: bool = False,
+    # limit=0 表示不分页（返回全部）
+    limit: int = 0,
+    offset: int = 0,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    stmt = select(User).order_by(User.id)
+    stmt = select(User)
     if active_only:
         stmt = stmt.where(User.is_active.is_(True))
-    users = db.execute(stmt).scalars().all()
-    return [
-        {
-            "id": u.id,
-            "username": u.username,
-            "nickname": u.nickname,
-            "phone": u.phone,
-            "is_active": u.is_active,
-        }
-        for u in users
-    ]
+    total = total_count(db, stmt)
+    users = db.execute(apply_pagination(stmt.order_by(User.id), limit, offset)).scalars().all()
+    return {
+        "items": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "nickname": u.nickname,
+                "phone": u.phone,
+                "is_active": u.is_active,
+            }
+            for u in users
+        ],
+        "total": total,
+    }
 
 
 @router.post("", status_code=201, summary="创建用户（仅管理员）")

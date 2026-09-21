@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
+from app.core.pagination import apply_pagination, total_count
 from app.core.security import get_current_user
 from app.models.ecommerce import Category, Product, Sku, User
 
@@ -50,10 +51,28 @@ class ProductOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-@router.get("", response_model=list[ProductOut], summary="商品列表（含 SKU）")
+class ProductListOut(BaseModel):
+    """列表接口信封响应：items 是 ProductOut 列表，total 是过滤后总数（与分页无关）。
+
+    为什么需要它：list_products 现在返回 {items, total} 信封而非裸列表，
+    若仍挂 response_model=list[ProductOut]，FastAPI 会把字典当列表校验、
+    在生产环境直接抛 ResponseValidationError（500）。items 是 ORM 对象，
+    靠 ProductOut.from_attributes 递归序列化。
+    """
+
+    items: list[ProductOut]
+    total: int
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("", response_model=ProductListOut, summary="商品列表（含 SKU）")
 def list_products(
     keyword: str = "",
     status: str = "on_sale",
+    # limit=0 表示不分页（返回全部）：SKU 下拉框要拿全量商品，不能被截断
+    limit: int = 0,
+    offset: int = 0,
     # 补鉴权：README 约定「除 /health 与 auth 外所有接口都必须携带身份凭证」，
     # 此前该接口（以及下面的上下架）漏了依赖，未登录也能调用
     current_user: User = Depends(get_current_user),
@@ -64,11 +83,17 @@ def list_products(
         stmt = stmt.where(Product.name.like(f"%{keyword}%"))
     if status:
         stmt = stmt.where(Product.status == status)
-    products = db.execute(stmt.order_by(Product.id)).scalars().unique().all()
+    total = total_count(db, stmt)
+    products = (
+        db.execute(apply_pagination(stmt.order_by(Product.id), limit, offset))
+        .scalars()
+        .unique()
+        .all()
+    )
     for p in products:
         for s in p.skus:
             s.price = float(s.price)
-    return products
+    return {"items": products, "total": total}
 
 
 @router.get("/{product_id}", response_model=ProductOut, summary="商品详情")
