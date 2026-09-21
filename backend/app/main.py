@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin_db, orders, products, workflows
+from app.api import admin_db, cart, orders, products, workflows
 from app.core.config import settings
 
 app = FastAPI(
@@ -23,6 +23,7 @@ app.add_middleware(
 
 api = settings.API_V1_PREFIX
 app.include_router(products.router, prefix=api)
+app.include_router(cart.router, prefix=api)
 app.include_router(orders.router, prefix=api)
 app.include_router(workflows.router, prefix=api)
 app.include_router(admin_db.router, prefix=api)

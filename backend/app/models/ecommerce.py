@@ -16,6 +16,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -106,7 +107,15 @@ class Sku(TimestampMixin, Base):
 
 
 class CartItem(TimestampMixin, Base):
+    """购物车项。
+
+    (user_id, sku_id) 唯一：同一商品重复加入时累加数量而非新增一行。
+    这条约束是数据层兜底 —— 「不新增行」不能只靠应用层保证，
+    并发请求或绕过 API 的写入都可能插入重复行。
+    """
+
     __tablename__ = "cart_items"
+    __table_args__ = (UniqueConstraint("user_id", "sku_id", name="uq_cart_user_sku"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(

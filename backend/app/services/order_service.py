@@ -112,10 +112,13 @@ class OrderService:
         items: list[dict],
         address_id: int | None = None,
         remark: str = "",
+        auto_commit: bool = True,
     ) -> Order:
         """创建订单：校验库存 → 算钱 → 扣库存 → 启动流程 → 推进到待付款。
 
-        整个操作在同一事务：库存扣减与流程启动要么都成功，要么都回滚。
+        auto_commit=False 时只 flush 不提交，供调用方把「下单」与别的写操作
+        （如清空购物车）放进同一个事务 —— 否则会出现订单已生成、
+        购物车却没清空的中间态。
         """
         if not items:
             raise ValueError("订单不能没有商品")
@@ -197,7 +200,8 @@ class OrderService:
 
         order.workflow_instance_id = instance.id
         sync_order_status(order, instance)
-        self.db.commit()
+        if auto_commit:
+            self.db.commit()
         return order
 
     # ---------- 流转 ----------

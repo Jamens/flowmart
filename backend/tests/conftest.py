@@ -39,6 +39,23 @@ def engine(db):
 
 
 @pytest.fixture
+def client(db, order_flow):
+    """把接口的数据库会话替换为测试库，并预置已发布的订单流程。
+
+    order_flow 是必需的：下单类接口会去查 published 的 order_flow 定义。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.core.database import get_db
+    from app.main import app
+
+    app.dependency_overrides[get_db] = lambda: db
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def order_flow(db):
     """建一条订单流程定义：start → 待付款 → 待发货 → 已发货 → 已完成。
 

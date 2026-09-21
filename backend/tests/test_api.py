@@ -9,24 +9,8 @@
 既真实走 HTTP 栈与依赖注入，又不依赖外部数据库。
 """
 import pytest
-from fastapi.testclient import TestClient
 
-from app.core.database import get_db
-from app.main import app
 from app.models.ecommerce import Product, Sku
-
-
-@pytest.fixture
-def client(db, order_flow):
-    """把接口的数据库会话替换为测试用的临时库，并预置已发布的订单流程。
-
-    order_flow 是必需的：下单接口会去查 published 的 order_flow 定义，
-    没有它创建订单会直接失败。
-    """
-    app.dependency_overrides[get_db] = lambda: db
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
 
 
 @pytest.fixture

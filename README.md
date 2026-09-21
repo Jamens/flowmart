@@ -71,6 +71,11 @@ DB_PASSWORD=1234560
 | POST | `/api/v1/products` | 创建商品 |
 | GET | `/api/v1/orders` | 订单列表，支持按 status 筛选 |
 | POST | `/api/v1/orders` | 创建订单（自动启动工作流） |
+| GET | `/api/v1/cart?user_id=` | 购物车列表（含合计） |
+| POST | `/api/v1/cart` | 加入购物车（同 SKU 自动累加） |
+| PATCH | `/api/v1/cart/{id}` | 修改数量（传 0 表示移除） |
+| DELETE | `/api/v1/cart/{id}` | 移除商品 |
+| POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空） |
 | GET | `/api/v1/orders/{id}` | 订单详情，含明细、可执行动作、流转时间线 |
 | POST | `/api/v1/orders/{id}/actions/{event}` | 推进流转（pay/ship/confirm/cancel/refund/approve/reject） |
 | GET | `/api/v1/workflows/definitions` | 流程定义列表 |
@@ -78,6 +83,13 @@ DB_PASSWORD=1234560
 | PUT | `/api/v1/workflows/definitions/{id}` | 更新流程（全量替换节点与流转边） |
 | POST | `/api/v1/workflows/definitions/{id}/publish` | 发布前校验（必须有 start/end、无悬空引用） |
 | GET | `/api/v1/admin/db/tables` | 数据库表浏览（只读） |
+
+### 购物车（`backend/app/api/cart.py`）
+
+- 同一 SKU 重复加入**累加数量**而非新增一行，避免同一商品在列表里出现多次
+- 累加后仍受库存约束，不能靠反复加入突破上限
+- 结算与「清空购物车」在同一事务内完成：下单失败时购物车保留，
+  不会出现「订单没生成、购物车却被清空」
 
 ### 前端管理后台（`frontend/`）
 
@@ -129,6 +141,26 @@ frontend/
 docs/            表结构与数据可视化页面（由脚本生成）
 ```
 
+## MySQL 兼容性验证
+
+开发默认用 SQLite，但生产目标是 MySQL。已在 **MySQL 8.0.45** 上完成实跑验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 建库建表 | 14 张表全部创建成功 |
+| 种子数据 | 7 个订单、25 条流转日志，退款按金额分流正确 |
+| 下单 | 库存扣减、金额计算（Decimal）正确 |
+| 流转推进 | 含 approve 等设计器新增的事件 |
+| 购物车 | 加购 / 累加 / 结算 / 清空全链路正常 |
+| 流程设计器 | 保存（全量替换节点与流转）正常 |
+
+针对方言差异已做的处理：
+
+- `Order.status` 长度对齐 `wf_nodes.key`（MySQL strict 模式超长会直接报错，SQLite 却静默放行）
+- SQL 标识符引用按方言区分：MySQL 用反引号、SQLite 用双引号
+
+切换到 MySQL：`DB_DIALECT=mysql` 环境变量，或写入 `.env`。
+
 ## 环境注意事项（Windows 踩坑记录）
 
 - **pip 走代理会失败**：本环境设置了 `HTTPS_PROXY`，访问清华源报 `No matching distribution found`，
@@ -142,6 +174,8 @@ docs/            表结构与数据可视化页面（由脚本生成）
 ## 待办
 
 - [ ] 用户认证与鉴权（当前订单归属固定在 `user_id=1`，仅为演示）
+- [ ] 购物车前端页面（后端 API 已完整并测试通过）
+- [ ] `users` / `addresses` / `categories` 的 CRUD 接口（有表无接口）
 - [ ] Alembic 迁移脚本（当前用 `create_all`，模型变更后需删表重建）
 - [ ] 库存并发控制（高并发下需要行锁或乐观锁）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本）
