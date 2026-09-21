@@ -9,13 +9,14 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session, selectinload
+from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.core.pagination import apply_pagination, total_count
 from app.core.security import get_current_user, require_admin
-from app.models.ecommerce import Order, User
+from app.models.ecommerce import Order, OrderItem, User
 from app.services.order_service import OrderService
 from app.services.workflow_engine import WorkflowError
 
@@ -80,15 +81,39 @@ def _serialize(order: Order, svc: OrderService) -> dict:
 @router.get("", summary="订单列表（管理员见全部 / 买家仅见自己）")
 def list_orders(
     status: str = "",
-    # limit=0 表示不分页（返回全部），保证既有调用方行为不变
-    limit: int = 0,
-    offset: int = 0,
+    # 关键词：匹配订单号或任一商品行项的 SKU 名称（历史订单冗余快照，改价/下架不影响）
+    keyword: str = "",
+    # 下单时间范围（YYYY-MM-DD，闭区间含当天）。为空表示不限制。
+    created_from: str = "",
+    created_to: str = "",
+    # limit=0 表示不分页（返回全部），保证既有调用方行为不变；le 防超大 limit 拖垮接口
+    limit: int = Query(0, ge=0, le=500),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     stmt = select(Order).options(selectinload(Order.items))
     if status:
         stmt = stmt.where(Order.status == status)
+    if keyword:
+        # 订单号 LIKE 或 任一商品行项名称 LIKE：用 or_ + 关系 any()（生成 EXISTS 子查询），
+        # 不 join 主表，因此不会让 total_count 的子查询重复计数
+        like = f"%{keyword}%"
+        stmt = stmt.where(
+            or_(Order.order_no.like(like), Order.items.any(OrderItem.sku_name.like(like)))
+        )
+    if created_from or created_to:
+        # 日期格式错误直接 400，而不是让 DB 抛方言相关的怪错
+        try:
+            if created_from:
+                f = datetime.fromisoformat(created_from)
+                stmt = stmt.where(Order.created_at >= f)
+            if created_to:
+                # 含当天结束：< 次日 0 点，避免漏掉当天的非 0 点订单
+                t = datetime.fromisoformat(created_to)
+                stmt = stmt.where(Order.created_at < t + timedelta(days=1))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="created_from/created_to 须为 YYYY-MM-DD")
     # 非管理员只能看自己的订单，避免任意买家遍历全平台订单（PII / 越权）
     if not current_user.is_admin:
         stmt = stmt.where(Order.user_id == current_user.id)

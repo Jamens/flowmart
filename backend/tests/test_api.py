@@ -174,6 +174,36 @@ def test_list_pagination_returns_total_and_slice(client, sku):
     assert len(page2["items"]) == 1
 
 
+def test_orders_list_search_and_date_filter(client, sku):
+    """订单列表搜索：关键词匹配订单号/商品名；时间范围按 created_at 闭区间过滤。"""
+    o1 = client.post("/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]}).json()
+    o2 = client.post("/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]}).json()
+
+    # 关键词匹配订单号（精确命中那一单）
+    r = client.get(f"/api/v1/orders?keyword={o1['order_no']}").json()
+    assert r["total"] == 1 and r["items"][0]["id"] == o1["id"]
+
+    # 关键词匹配商品行项 sku_name（create_order 把 sku_name 冗余为商品名，
+    # sku fixture 的商品名是「测试商品」，两单都含）
+    r = client.get("/api/v1/orders?keyword=测试商品").json()
+    assert r["total"] == 2
+
+    # 时间范围：用实际落库的 created_at 日期，避免测试机时区与 DB 时区不一致
+    from datetime import date, timedelta
+
+    order_date = o1["created_at"][:10]
+    r = client.get(f"/api/v1/orders?created_from={order_date}&created_to={order_date}").json()
+    assert r["total"] == 2
+
+    # 截止前一天 → 不应包含今天的单
+    prev = (date.fromisoformat(order_date) - timedelta(days=1)).isoformat()
+    r = client.get(f"/api/v1/orders?created_to={prev}").json()
+    assert r["total"] == 0
+
+    # 非法日期 → 400（不要让 DB 抛方言相关的怪错）
+    assert client.get("/api/v1/orders?created_from=not-a-date").status_code == 400
+
+
 def test_products_list_returns_envelope(client):
     """商品列表返回 {items, total} 信封。
 

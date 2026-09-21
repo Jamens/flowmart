@@ -286,7 +286,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 前端管理后台（订单管理页、流程设计器、登录页）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 92 passed）
+- [x] 测试（pytest 全量 109 passed）
 
 ### ❌ 待实现
 
@@ -299,5 +299,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [ ] JWT 刷新 / 续期机制（当前令牌过期即需重新登录）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [ ] 登录限流（无防暴力破解的速率限制）
-- [ ] 订单搜索 / 筛选增强（目前仅按 `status` 筛选，无关键词 / 时间范围）
+- [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
 - [ ] （可选）邮箱 / 手机验证

@@ -5,6 +5,26 @@
       <el-select v-model="status" placeholder="按状态筛选" clearable @change="onFilterChange" style="width: 180px">
         <el-option v-for="(label, key) in STATUS" :key="key" :label="label" :value="key" />
       </el-select>
+      <!-- 关键词：订单号或商品名（后端匹配 order_no + 订单行项 sku_name 快照） -->
+      <el-input
+        v-model="keyword"
+        placeholder="订单号 / 商品名"
+        clearable
+        style="width: 200px"
+        @keyup.enter="onFilterChange"
+        @clear="onFilterChange"
+      />
+      <!-- 下单时间范围，闭区间含当天；空表示不限制 -->
+      <el-date-picker
+        v-model="dateRange"
+        type="daterange"
+        value-format="YYYY-MM-DD"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        style="width: 260px"
+        @change="onFilterChange"
+      />
       <el-button @click="load">刷新</el-button>
       <el-button type="primary" @click="openCreate">新建订单</el-button>
     </div>
@@ -152,6 +172,8 @@ const EVENT = {
 
 const list = ref([])
 const status = ref('')
+const keyword = ref('')
+const dateRange = ref([])
 const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(20)
@@ -175,6 +197,9 @@ async function load() {
     // 列表接口返回 {items, total}：total 是过滤后的总数，与当前页无关
     const res = await api.listOrders({
       status: status.value,
+      keyword: keyword.value,
+      created_from: dateRange.value?.[0] || '',
+      created_to: dateRange.value?.[1] || '',
       limit: pageSize.value,
       offset: (page.value - 1) * pageSize.value,
     })
