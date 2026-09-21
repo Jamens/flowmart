@@ -58,6 +58,14 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _require_secure_cookie_in_prod(self):
+        # 生产（非 debug）下若 COOKIE_SECURE 仍为 False，HttpOnly Cookie 会经明文 HTTP 传输，
+        # 网络中间人可直接窃取会话令牌。必须启动即报错，而不是悄悄裸奔。
+        if not self.DEBUG and not self.COOKIE_SECURE:
+            raise ValueError("生产环境必须 COOKIE_SECURE=True，否则会话 Cookie 会经明文 HTTP 泄露")
+        return self
+
+    @model_validator(mode="after")
     def _require_bootstrap_admin(self):
         # 去掉首尾空白后再判断：裸 " zhangsan " 这类带空格的值若不归一化，
         # 会和真实用户名匹配不上，导致「谁都不是管理员」、系统静默锁死。

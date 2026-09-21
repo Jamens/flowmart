@@ -141,6 +141,10 @@ def test_secret_key_guard_blocks_default_in_prod():
     with pytest.raises(ValidationError):
         Settings(DEBUG=False, SECRET_KEY="dev-only-insecure-secret-change-me")
 
-    # 显式指定强密钥则可正常构造
-    s = Settings(DEBUG=False, SECRET_KEY="a-strong-random-prod-secret-at-least-32-chars")
+    # 显式指定强密钥 + COOKIE_SECURE=True（生产必须）则可正常构造
+    s = Settings(
+        DEBUG=False,
+        SECRET_KEY="a-strong-random-prod-secret-at-least-32-chars",
+        COOKIE_SECURE=True,
+    )
     assert s.SECRET_KEY == "a-strong-random-prod-secret-at-least-32-chars"

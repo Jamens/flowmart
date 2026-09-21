@@ -9,8 +9,12 @@ export function setUnauthorizedHandler(fn) {
 // 令牌由后端写入 httpOnly Cookie，浏览器随 credentials: 'include' 自动携带；
 // 前端不再用 localStorage 存明文令牌，从根本上避免 XSS 窃令牌。
 async function request(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
-  const res = await fetch(BASE + path, { headers, credentials: 'include', ...options })
+  // 合并默认头与调用方传入的头；credentials:'include' 放在最后，确保 Cookie 鉴权永不被覆盖掉
+  const res = await fetch(BASE + path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    credentials: 'include',
+  })
   if (res.status === 401) {
     // 令牌失效/缺失：回到登录页，避免卡在错误态（Cookie 由后端 /auth/logout 清除）
     if (unauthorizedHandler) unauthorizedHandler()

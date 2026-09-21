@@ -36,3 +36,43 @@ def test_cors_rejects_unknown_origin(raw_client):
     r = raw_client.get("/api/v1/health", headers={"Origin": "http://evil.example.com"})
     # 未配置的源不应被回显，杜绝任意站点带凭据跨域调用
     assert r.headers.get("access-control-allow-origin") != "http://evil.example.com"
+
+
+def test_logout_clears_cookie(raw_client):
+    raw_client.post("/api/v1/auth/register", json={"username": "logoutuser", "password": "secret1"})
+    raw_client.post("/api/v1/auth/login", json={"username": "logoutuser", "password": "secret1"})
+    r = raw_client.post("/api/v1/auth/logout")
+    assert r.status_code == 200
+    sc = r.headers.get("set-cookie", "")
+    # 退出登录必须把 Cookie 置空并 Max-Age=0，浏览器随即丢弃
+    assert "fm_token=" in sc
+    assert "max-age=0" in sc.lower()
+    # 清掉后再带一个伪造 Cookie 访问 /me 应 401，证明 Cookie 已失效
+    after = raw_client.get("/api/v1/auth/me", cookies={"fm_token": "bogus"})
+    assert after.status_code == 401
+
+
+def test_login_sets_secure_cookie_in_prod(raw_client, monkeypatch):
+    # 生产环境 COOKIE_SECURE=True：浏览器只有 HTTPS 才接受该 Cookie，明文 HTTP 下不发送
+    monkeypatch.setattr("app.core.security.settings.COOKIE_SECURE", True)
+    raw_client.post("/api/v1/auth/register", json={"username": "secureuser", "password": "secret1"})
+    r = raw_client.post("/api/v1/auth/login", json={"username": "secureuser", "password": "secret1"})
+    sc = r.headers.get("set-cookie", "")
+    assert "Secure" in sc  # 生产必须带 Secure
+    assert "samesite=lax" in sc.lower()  # SameSite 属性正确写入（Starlette 输出小写）
+
+
+def test_bearer_header_takes_precedence_over_cookie(raw_client):
+    # 同时带有效 Bearer 头与伪造 Cookie，应以 Bearer 头身份为准，杜绝 Cookie 混淆/冒充
+    raw_client.post("/api/v1/auth/register", json={"username": "precedence", "password": "secret1"})
+    token = (
+        raw_client.post("/api/v1/auth/login", json={"username": "precedence", "password": "secret1"})
+        .json()["access_token"]
+    )
+    r = raw_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        cookies={"fm_token": "forged-token"},
+    )
+    assert r.status_code == 200
+    assert r.json()["username"] == "precedence"

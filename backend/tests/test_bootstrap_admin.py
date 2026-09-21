@@ -73,3 +73,21 @@ def test_ensure_admin_exists_ok_with_admin(db):
     )
     db.commit()
     ensure_admin_exists(db)  # 不抛
+
+
+def test_cookie_secure_required_in_prod(monkeypatch):
+    """生产（DEBUG=False）下 COOKIE_SECURE 仍为 False，会话 Cookie 会经明文 HTTP 泄露，必须启动即报错。"""
+    monkeypatch.setenv("DEBUG", "False")
+    monkeypatch.setenv("COOKIE_SECURE", "False")
+    # 同时给一个强密钥，避免触发 SECRET_KEY 守卫而掩盖本项
+    monkeypatch.setenv("SECRET_KEY", "prod-strong-secret-not-dev-default-1234567890")
+    with pytest.raises(ValueError, match="COOKIE_SECURE"):
+        Settings()
+
+
+def test_cookie_secure_ok_when_true_in_prod(monkeypatch):
+    """生产（DEBUG=False）下 COOKIE_SECURE=True 应通过校验。"""
+    monkeypatch.setenv("DEBUG", "False")
+    monkeypatch.setenv("COOKIE_SECURE", "True")
+    monkeypatch.setenv("SECRET_KEY", "prod-strong-secret-not-dev-default-1234567890")
+    Settings()  # 不抛即为通过
