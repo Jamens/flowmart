@@ -17,6 +17,9 @@
         <el-tab-pane label="商品管理" name="products">
           <ProductsView />
         </el-tab-pane>
+        <el-tab-pane label="分类管理" name="categories">
+          <CategoriesView />
+        </el-tab-pane>
         <el-tab-pane label="流程设计器" name="designer">
           <DesignerView />
         </el-tab-pane>
@@ -32,6 +35,7 @@ import LoginView from './views/LoginView.vue'
 import OrdersView from './views/OrdersView.vue'
 import CartView from './views/CartView.vue'
 import ProductsView from './views/ProductsView.vue'
+import CategoriesView from './views/CategoriesView.vue'
 import DesignerView from './views/DesignerView.vue'
 
 // 登录态由后端 httpOnly Cookie 决定，前端不再持有明文令牌

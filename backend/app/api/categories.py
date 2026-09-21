@@ -142,7 +142,12 @@ def update_category(
 
 
 @router.delete("/{category_id}", summary="删除分类")
-def delete_category(category_id: int, db: Session = Depends(get_db)):
+def delete_category(
+    category_id: int,
+    # 删分类会改变商品归类，不能让未登录的人调用（此前漏了鉴权）
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     c = _get_category(db, category_id)
 
     children = (

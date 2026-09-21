@@ -138,3 +138,9 @@ def test_toggle_shelf_requires_auth(raw_client, sku):
     """
     r = raw_client.patch(f"/api/v1/products/{sku.product_id}/shelf?on_sale=false")
     assert r.status_code == 401
+
+
+def test_delete_category_requires_auth(raw_client):
+    """删分类会改变商品归类，未登录必须 401（此前该接口漏了鉴权）。"""
+    r = raw_client.delete("/api/v1/categories/1")
+    assert r.status_code == 401

@@ -292,7 +292,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 
 - [x] 购物车前端页面（`CartView.vue`：选 SKU 加购、改数量、移除、合计、选地址结算；数量改动受控渲染，失败回滚到后端真实值）
 - [x] 商品管理页面（`ProductsView.vue`：搜索 / 状态筛选含下架、SKU 展开明细、上架下架、新建商品含动态 SKU 行）
-- [ ] 分类管理页面
+- [x] 分类管理页面（`CategoriesView.vue`：树形层级、商品数、新建/编辑/删除、加子分类；有子分类或仍被商品引用时后端拒绝删除）
 - [ ] 用户管理页面（含收货地址管理）
 - [x] Alembic 迁移脚本（初始迁移已生成并与模型一致；`alembic upgrade head` / `downgrade base`；`tests/test_migrations.py` 守住「改模型忘写迁移」）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本，无版本历史 / 回滚）

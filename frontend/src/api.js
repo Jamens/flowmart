@@ -86,6 +86,12 @@ export const api = {
 
   // 分类
   listCategories: () => request('/categories'),
+  listCategoryTree: () => request('/categories/tree'),
+  createCategory: (payload) =>
+    request('/categories', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCategory: (id, payload) =>
+    request(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteCategory: (id) => request(`/categories/${id}`, { method: 'DELETE' }),
 
   // 收货地址（必须走 /users/{id}/addresses：用户详情不返回地址，避免 PII 泄露）
   listAddresses: (userId) => request(`/users/${userId}/addresses`),
