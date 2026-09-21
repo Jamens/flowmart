@@ -257,9 +257,11 @@ async function fire(e) {
 async function openCreate() {
   form.value = { sku_id: null, quantity: 1, address_id: null }
   try {
-    // 收货地址强制走归属校验（路径 user_id 必须等于令牌用户），故先取当前用户再拉地址列表
+    // currentUserId 已在挂载时缓存；仅在挂载取身份失败时才兜底再取一次。
+    // 地址列表每次开弹窗都拉，保证最新（用户可能在别处增删了地址）；
+    // 若仍取不到身份（如令牌失效），跳过地址拉取，避免一次必失败的请求
     if (!currentUserId.value) currentUserId.value = (await api.me()).id
-    addresses.value = await api.listAddresses(currentUserId.value)
+    addresses.value = currentUserId.value ? await api.listAddresses(currentUserId.value) : []
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -291,7 +293,15 @@ async function submitCreate() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  // 当前用户 id 只需取一次，挂载时缓存；之后开弹窗只拉地址列表，避免每次都打 /auth/me
+  try {
+    currentUserId.value = (await api.me()).id
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+})
 </script>
 
 <style scoped>
