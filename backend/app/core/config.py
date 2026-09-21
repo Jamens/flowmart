@@ -2,6 +2,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/core/config.py -> parents[3] 即项目根目录
@@ -36,6 +37,13 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _require_strong_secret_in_prod(self):
+        # 生产（非 debug）下仍用开发默认密钥意味着任何人都能伪造令牌，必须启动即报错
+        if not self.DEBUG and self.SECRET_KEY == "dev-only-insecure-secret-change-me":
+            raise ValueError("生产环境必须设置强随机 SECRET_KEY，当前仍为开发默认值")
+        return self
 
     @property
     def database_url(self) -> str:

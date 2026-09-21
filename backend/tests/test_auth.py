@@ -93,3 +93,54 @@ def test_duplicate_username_rejected(raw_client):
     raw_client.post("/api/v1/auth/register", json={"username": "eve", "password": "secret1"})
     r = raw_client.post("/api/v1/auth/register", json={"username": "eve", "password": "secret1"})
     assert r.status_code == 400
+
+
+def test_malformed_token_rejected(raw_client):
+    # 坏签名 / 坏 base64 必须 401，不能 500
+    assert raw_client.get("/api/v1/cart", headers={"Authorization": "Bearer not.a.jwt"}).status_code == 401
+    assert raw_client.get("/api/v1/cart", headers={"Authorization": "Bearer xxx"}).status_code == 401
+
+
+def test_cross_user_cannot_read_address(raw_client):
+    """真实双令牌验证：用户 B 拿不到用户 A 的地址（_assert_owner 拦截）。"""
+    a = raw_client.post("/api/v1/auth/register", json={"username": "userA", "password": "secret1"}).json()
+    b = raw_client.post("/api/v1/auth/register", json={"username": "userB", "password": "secret1"}).json()
+    token_a = raw_client.post("/api/v1/auth/login", json={"username": "userA", "password": "secret1"}).json()["access_token"]
+    token_b = raw_client.post("/api/v1/auth/login", json={"username": "userB", "password": "secret1"}).json()["access_token"]
+    h_a = {"Authorization": f"Bearer {token_a}"}
+    h_b = {"Authorization": f"Bearer {token_b}"}
+
+    # A 给自己建地址
+    addr = raw_client.post(
+        f"/api/v1/users/{a['id']}/addresses",
+        headers=h_a,
+        json={"receiver": "A先生", "phone": "13800000001"},
+    ).json()
+    assert addr["id"]
+
+    # B 读/改 A 的地址必须 404
+    assert raw_client.get(f"/api/v1/users/{a['id']}/addresses", headers=h_b).status_code == 404
+    assert raw_client.patch(
+        f"/api/v1/users/{a['id']}/addresses/{addr['id']}", headers=h_b, json={"receiver": "黑客"}
+    ).status_code == 404
+    # A 自己读得到
+    assert raw_client.get(f"/api/v1/users/{a['id']}/addresses", headers=h_a).status_code == 200
+
+
+def test_secret_key_guard_blocks_default_in_prod():
+    """生产（非 debug）下仍用默认弱密钥必须启动即报错，否则任何人都能伪造令牌。
+
+    这是 code review 后的加固项：guard 曾在一次静默丢改中丢失导致生产可被令牌伪造，
+    用本测试把「修复」锁死，避免再次回归。
+    """
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    # 非 debug + 默认弱密钥 => 必须抛 ValidationError
+    with pytest.raises(ValidationError):
+        Settings(DEBUG=False, SECRET_KEY="dev-only-insecure-secret-change-me")
+
+    # 显式指定强密钥则可正常构造
+    s = Settings(DEBUG=False, SECRET_KEY="a-strong-random-prod-secret-at-least-32-chars")
+    assert s.SECRET_KEY == "a-strong-random-prod-secret-at-least-32-chars"

@@ -161,31 +161,15 @@ def get_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # 注意：不在此返回收货地址 —— 地址含 receiver/手机/详细地址等敏感信息，
+    # 应通过归属校验的 /users/{id}/addresses 获取，避免任何登录用户读到他人地址。
     u = _get_user(db, user_id)
-    addresses = (
-        db.execute(select(Address).where(Address.user_id == u.id).order_by(Address.id))
-        .scalars()
-        .all()
-    )
     return {
         "id": u.id,
         "username": u.username,
         "nickname": u.nickname,
         "phone": u.phone,
         "is_active": u.is_active,
-        "addresses": [
-            {
-                "id": a.id,
-                "receiver": a.receiver,
-                "phone": a.phone,
-                "province": a.province,
-                "city": a.city,
-                "district": a.district,
-                "detail": a.detail,
-                "is_default": a.is_default,
-            }
-            for a in addresses
-        ],
     }
 
 

@@ -10,12 +10,12 @@
 令牌里只放 `sub`（用户 id）、`iat`、`exp` 三类claim，不放敏感信息。
 """
 import base64
+import binascii
 import hashlib
 import hmac
 import json
 import secrets
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, HTTPException
@@ -63,20 +63,24 @@ def create_access_token(sub: int | str, expires_minutes: int | None = None, extr
 
 
 def decode_access_token(token: str) -> dict:
-    """校验签名与过期，返回 payload；任何问题抛 JWTError。"""
+    """校验签名与过期，返回 payload；任何问题抛 JWTError（统一转成 401）。"""
     try:
         h, p, s = token.split(".")
     except ValueError:
         raise JWTError("令牌格式错误")
-    expected = hmac.new(settings.SECRET_KEY.encode("utf-8"), f"{h}.{p}".encode("utf-8"), hashlib.sha256).digest()
-    # 常量时间比较，防止时序攻击
-    if not hmac.compare_digest(expected, _b64d(s)):
-        raise JWTError("签名无效")
     try:
+        expected = hmac.new(settings.SECRET_KEY.encode("utf-8"), f"{h}.{p}".encode("utf-8"), hashlib.sha256).digest()
+        # 常量时间比较，防止时序攻击；坏 base64 也在此兜住
+        if not hmac.compare_digest(expected, _b64d(s)):
+            raise JWTError("签名无效")
         payload = json.loads(_b64d(p))
-    except Exception:
-        raise JWTError("载荷解析失败")
-    if payload.get("exp") is not None and payload["exp"] < int(time.time()):
+    except (JWTError, ValueError, binascii.Error):
+        raise JWTError("签名无效或载荷损坏")
+    if "sub" not in payload:
+        raise JWTError("缺少用户标识")
+    if "exp" not in payload:
+        raise JWTError("缺少过期时间")
+    if payload["exp"] < int(time.time()):
         raise JWTError("令牌已过期")
     return payload
 
@@ -84,8 +88,8 @@ def decode_access_token(token: str) -> dict:
 # ---------------- 密码哈希 ----------------
 
 
-def hash_password(pw: str, *, iterations: int = 100_000) -> str:
-    """PBKDF2-HMAC-SHA256，返回可存储的字符串。"""
+def hash_password(pw: str, *, iterations: int = 200_000) -> str:
+    """PBKDF2-HMAC-SHA256，返回可存储的字符串（迭代次数随算力提升而调大）。"""
     salt = secrets.token_bytes(16)
     dk = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, iterations)
     return f"pbkdf2$sha256${iterations}${_b64u(salt)}${_b64u(dk)}"
