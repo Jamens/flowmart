@@ -11,6 +11,8 @@
       :data="tree"
       row-key="id"
       :tree-props="{ children: 'children' }"
+      default-expand-all
+      empty-text="暂无分类"
       v-loading="loading"
       stripe
     >
@@ -27,8 +29,6 @@
         </template>
       </el-table-column>
     </el-table>
-
-    <div v-if="!loading && !tree.length" class="empty">暂无分类</div>
 
     <el-dialog v-model="visible" :title="editing ? '编辑分类' : '新建分类'" width="460px">
       <el-form label-width="80px">
@@ -71,10 +71,26 @@ const visible = ref(false)
 const editing = ref(null)
 const form = ref({ name: '', parent_id: 0, sort: 0 })
 
-// 编辑时不能选自己当父级
-const parentOptions = computed(() =>
-  flat.value.filter((c) => !editing.value || c.id !== editing.value.id)
-)
+function descendantIds(node) {
+  const ids = []
+  const walk = (n) => {
+    for (const ch of n.children || []) {
+      ids.push(ch.id)
+      walk(ch)
+    }
+  }
+  walk(node)
+  return ids
+}
+
+// 编辑时不能选自己，也不能选自己的任意子孙 —— 否则层级成环，
+// 两个节点会互相成为对方的 children，谁都不会出现在树里（后端虽有 400 兜底，
+// 但能从选项里去掉就别让用户撞上）
+const parentOptions = computed(() => {
+  if (!editing.value) return flat.value
+  const banned = new Set([editing.value.id, ...descendantIds(editing.value)])
+  return flat.value.filter((c) => !banned.has(c.id))
+})
 
 async function load() {
   loading.value = true
@@ -109,7 +125,8 @@ async function submit() {
   if (!form.value.name.trim()) return ElMessage.warning('请填写分类名称')
   const payload = {
     name: form.value.name.trim(),
-    sort: form.value.sort,
+    // 清空数字输入框会 emit null，而 sort 列 NOT NULL，传 null 会让后端 500
+    sort: form.value.sort ?? 0,
     parent_id: form.value.parent_id || 0,
   }
   try {
@@ -121,6 +138,7 @@ async function submit() {
       ElMessage.success('已创建')
     }
     visible.value = false
+    editing.value = null // 及时清掉，否则会持有 load() 之后已失效的行引用
     await load()
   } catch (e) {
     // 后端对成环、父分类不存在等情况都有明确 400 文案，直接透出

@@ -144,3 +144,25 @@ def test_delete_category_requires_auth(raw_client):
     """删分类会改变商品归类，未登录必须 401（此前该接口漏了鉴权）。"""
     r = raw_client.delete("/api/v1/categories/1")
     assert r.status_code == 401
+
+
+def test_list_categories_requires_auth(raw_client):
+    """分类列表/树同样需要登录（与 README「除 health/auth 外都要凭证」一致）。"""
+    assert raw_client.get("/api/v1/categories").status_code == 401
+    assert raw_client.get("/api/v1/categories/tree").status_code == 401
+
+
+def test_update_category_ignores_explicit_null_sort(client):
+    """前端清空数字输入框会显式传 sort=null。
+
+    若照单全收会把 None 写进 NOT NULL 的 sort 列而 500，正确做法是忽略该字段。
+    """
+    r = client.post("/api/v1/categories", json={"name": "空值排序分类", "sort": 5})
+    assert r.status_code == 201, r.text
+    cid = r.json()["id"]
+
+    r2 = client.patch(f"/api/v1/categories/{cid}", json={"sort": None})
+    assert r2.status_code == 200, r2.text
+
+    row = next(c for c in client.get("/api/v1/categories").json() if c["id"] == cid)
+    assert row["sort"] == 5, "显式 null 应被忽略，原值保留"

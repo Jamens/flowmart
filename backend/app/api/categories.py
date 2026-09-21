@@ -66,7 +66,12 @@ def _count_products(db: Session, category_id: int) -> int:
 
 
 @router.get("", summary="分类列表（带商品数量）")
-def list_categories(parent_id: int | None = None, db: Session = Depends(get_db)):
+def list_categories(
+    parent_id: int | None = None,
+    # 与 README 契约一致：除 /health 与 auth 外所有接口都要凭证
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     stmt = select(Category).order_by(Category.sort, Category.id)
     if parent_id is not None:
         stmt = stmt.where(Category.parent_id == parent_id)
@@ -84,7 +89,9 @@ def list_categories(parent_id: int | None = None, db: Session = Depends(get_db))
 
 
 @router.get("/tree", summary="分类树")
-def category_tree(db: Session = Depends(get_db)):
+def category_tree(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     """按 parent_id 递归组装成嵌套树，支持任意层级。
 
     只有 parent_id 为 0 或父级不存在的节点会作为根节点。
@@ -135,7 +142,9 @@ def update_category(
     if payload.parent_id is not None and payload.parent_id:
         _get_category(db, payload.parent_id)
         _assert_no_cycle(db, category_id, payload.parent_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    # exclude_none 必须加：前端清空数字输入框会显式传 null，
+    # 只 exclude_unset 的话会把 None 写进 NOT NULL 的列，直接 500。
+    for field, value in payload.model_dump(exclude_unset=True, exclude_none=True).items():
         setattr(c, field, value)
     db.commit()
     return {"id": c.id, "name": c.name}
