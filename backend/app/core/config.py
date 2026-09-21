@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # 登录限流（防暴力破解）：同一 (客户端IP, 用户名) 在窗口内失败超阈值即拒。
     # 内存级固定窗口——单实例足够、零依赖；多实例/生产需换 Redis 等共享存储，
     # 否则限流只对本机请求生效（注释见 backend/app/core/ratelimit.py）。
+    # ⚠️ 前提：限流依赖的客户端 IP 取自 X-Forwarded-For，必须已由可信网关覆写，
+    # 否则攻击者伪造该头即可绕过限流（详见 ratelimit.py 顶部「部署前提」）。
     LOGIN_RATE_LIMIT_MAX: int = 5
     LOGIN_RATE_LIMIT_WINDOW: int = 60  # 秒
 
