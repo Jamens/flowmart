@@ -10,3 +10,5 @@ simpleeval>=0.9           # 流程条件表达式的安全求值，替代 eval
 pytest>=8.0
 httpx>=0.28               # FastAPI TestClient 依赖
 python-multipart>=0.0.20
+redis>=5.0               # 登录限流多实例共享计数后端（可选；LOGIN_RATE_LIMIT_REDIS_URL 留空则用内存）
+fakeredis>=2.0           # 限流 Redis 后端的离线测试（仅测试用）

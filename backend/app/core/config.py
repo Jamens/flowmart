@@ -40,10 +40,20 @@ class Settings(BaseSettings):
     # 登录限流（防暴力破解）：同一 (客户端IP, 用户名) 在窗口内失败超阈值即拒。
     # 内存级固定窗口——单实例足够、零依赖；多实例/生产需换 Redis 等共享存储，
     # 否则限流只对本机请求生效（注释见 backend/app/core/ratelimit.py）。
-    # ⚠️ 前提：限流依赖的客户端 IP 取自 X-Forwarded-For，必须已由可信网关覆写，
-    # 否则攻击者伪造该头即可绕过限流（详见 ratelimit.py 顶部「部署前提」）。
     LOGIN_RATE_LIMIT_MAX: int = 5
     LOGIN_RATE_LIMIT_WINDOW: int = 60  # 秒
+
+    # 登录限流——客户端 IP 来源（安全开关，默认 False）：
+    # False（默认）→ 取 request.client.host（直连真实 socket 地址，客户端无法伪造）；
+    # True  → 仅当反向代理已用真实客户端 IP 覆写 X-Forwarded-For 时才取其首跳。
+    # 切勿在「客户端可自己塞 X-Forwarded-For」的直连场景开 True，否则攻击者可伪造
+    # 不同 XFF 让每次请求都生成新限流键、永远累计不到阈值，限流直接失效。
+    LOGIN_RATE_LIMIT_TRUST_PROXY: bool = False
+
+    # 登录限流——多实例/负载均衡共享计数（留空=进程内内存，单实例够用）：
+    # 非空时启用 Redis 后端（INCR+EXPIRE 原子计数），限流对全部实例统一生效。
+    # 例如 "redis://127.0.0.1:6379/0"。连不上会在启动时直接报错（fail-fast）。
+    LOGIN_RATE_LIMIT_REDIS_URL: str = ""
 
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"

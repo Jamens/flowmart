@@ -1,25 +1,26 @@
-"""登录失败限流：内存级固定窗口计数器。
+"""登录失败限流：可插拔后端的固定窗口计数器。
 
-为什么是内存级、而不是 Redis：
-- 单实例部署（开发、小流量服务）足够，且零外部依赖；
-- 多实例 / 负载均衡场景必须换成 Redis 等共享存储，否则每个实例各计各的、
-  攻击者只要打散请求到不同实例就能绕过。届时把本模块的 `_buckets` 换成
-  Redis 的 `INCR + EX` / 有序集合即可，对外接口保持不变。
+为什么是固定窗口 + 可插拔存储：
+- **单实例**（开发、小流量）：用进程内内存 dict 即可，零外部依赖；
+- **多实例 / 负载均衡**：必须换成共享存储（Redis），否则每个进程各计各的、
+  攻击者把请求打散到不同实例就能绕过限流。后端抽象成 `RateLimitStore`，
+  对外接口不变，`MemoryStore` / `RedisStore` 任意切换（由 `LOGIN_RATE_LIMIT_REDIS_URL` 决定）。
 
 限流键为什么是 (IP, 用户名) 而非纯 IP：
 - 纯 IP 限流会把「同一出口 IP 下的所有正常用户」一起误伤（办公网 NAT 场景）；
-- (IP, 用户名) 更贴近「针对某个账号的暴力破解」，且攻击者也只能封锁自己正在猜的账号，
-  代价是理论上可用大量不同用户名对单个 IP 做「账号预封锁」DoS——
-  本项目的威胁模型以「防密码爆破」为主，故取该权衡，注释在此点明。
+- (IP, 用户名) 更贴近「针对某个账号的暴力破解」，代价是理论上可用大量不同用户名
+  对单个 IP 做「账号预封锁」DoS——本项目以「防密码爆破」为主，故取该权衡。
 
-**⚠️ 部署前提（重要）**：`_client_ip` 取 `X-Forwarded-For` 的第一个值作为客户端 IP。
-若反向代理（Nginx 等）不**覆盖**该头，攻击者可每次伪造不同 `X-Forwarded-For`，
-从而对每个请求生成新的限流键、永远无法累计到阈值——限流直接失效。
-因此本限流**仅在可信网关已用真实客户端 IP 覆写 `X-Forwarded-For` 时有效**；
-纯直连（无代理、客户端可控该头）场景下需改为取 `request.client.host`。
+**⚠️ 客户端 IP 来源（部署前提）**：
+`_client_ip` 默认取 `request.client.host`（直连真实 socket 地址，客户端无法伪造），
+仅当 `LOGIN_RATE_LIMIT_TRUST_PROXY=True` 时才信任 `X-Forwarded-For` 首跳。
+`X-Forwarded-For` 只有在反向代理（Nginx 等）已用真实客户端 IP **覆写**该头时才可信；
+若直连或客户端可控该头却开了 `TRUST_PROXY=True`，攻击者可每次伪造不同 XFF 生成新限流键、
+永远累计不到阈值——限流直接失效。详见 `app/core/config.py` 对应字段注释。
 """
 import threading
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from app.core.config import settings
@@ -31,79 +32,187 @@ class _Bucket:
     failures: int
 
 
-class LoginRateLimiter:
-    """按 (客户端IP, 用户名) 固定窗口计数登录失败次数。"""
+class RateLimitStore(ABC):
+    """限流计数后端接口。两种实现：内存（单实例）/ Redis（多实例共享）。"""
+
+    @abstractmethod
+    def register_failure(self, key: str, window: int) -> int:
+        """记一次失败，返回当前窗口内失败总数。"""
+
+    @abstractmethod
+    def count(self, key: str, window: int) -> int:
+        """当前窗口内失败计数（无键/已过期返回 0）。"""
+
+    @abstractmethod
+    def ttl(self, key: str, window: int) -> int:
+        """距窗口重置剩余秒数（无键/无过期返回 window）。"""
+
+    @abstractmethod
+    def reset(self, key: str) -> None:
+        """清空单个键（登录成功）。"""
+
+    @abstractmethod
+    def reset_all(self) -> None:
+        """清空全部计数（测试隔离 / 运维解封）。"""
+
+
+class MemoryStore(RateLimitStore):
+    """进程内固定窗口计数。单实例够用；非原子跨进程。"""
 
     def __init__(self) -> None:
-        # key = (client_ip, username) -> 当前窗口的失败计数与窗口起点
-        self._buckets: dict[tuple[str, str], _Bucket] = {}
+        self._buckets: dict[str, _Bucket] = {}
         # login 是 sync 端点，由 FastAPI 在线程池里跑，并发请求会同时改 _buckets；
         # read-modify-write（failures += 1）与 is_blocked/register_failure 之间的 TOCTOU
-        # 都需要一把锁兜住，否则计数可能丢失（最坏多放行几次，不会崩，但削弱了限流）。
+        # 都要锁兜住，否则计数可能丢失（最坏多放行几次，不会崩，但削弱限流）。
         self._lock = threading.Lock()
 
-    @staticmethod
-    def _client_ip(request) -> str:
-        # 反向代理（Nginx 等）透传的真实客户端 IP 优先；否则回退到直连 socket 地址。
-        # 见文件顶部「部署前提」：该头必须来自可信网关的覆写，否则可被伪造绕过限流。
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        client = getattr(request, "client", None)
-        return client.host if client else "unknown"
-
-    def _key(self, request, username: str) -> tuple[str, str]:
-        return (self._client_ip(request), username)
-
-    def _current(self, key) -> _Bucket | None:
-        """返回当前有效窗口的 bucket；若窗口已过期则视为无（返回 None）。
-
-        调用方需已持有 self._lock。
-        """
+    def _current(self, key: str, window: int) -> _Bucket | None:
         b = self._buckets.get(key)
         if b is None:
             return None
-        if time.monotonic() - b.window_start >= settings.LOGIN_RATE_LIMIT_WINDOW:
-            # 窗口过期：清掉旧计数，当作全新开始
-            self._buckets.pop(key, None)
+        if time.monotonic() - b.window_start >= window:
+            self._buckets.pop(key, None)  # 窗口过期：清旧计数，当全新开始
             return None
         return b
 
-    def register_failure(self, request, username: str) -> None:
-        """记一次登录失败；进入新窗口则重置计数起点。"""
+    def register_failure(self, key: str, window: int) -> int:
         with self._lock:
-            key = self._key(request, username)
-            b = self._current(key)
+            b = self._current(key, window)
             if b is None:
                 b = _Bucket(window_start=time.monotonic(), failures=0)
                 self._buckets[key] = b
             b.failures += 1
+            return b.failures
+
+    def count(self, key: str, window: int) -> int:
+        with self._lock:
+            b = self._current(key, window)
+            return b.failures if b else 0
+
+    def ttl(self, key: str, window: int) -> int:
+        with self._lock:
+            b = self._current(key, window)
+            if b is None:
+                return window
+            remaining = window - (time.monotonic() - b.window_start)
+            return max(1, int(remaining))
+
+    def reset(self, key: str) -> None:
+        with self._lock:
+            self._buckets.pop(key, None)
+
+    def reset_all(self) -> None:
+        with self._lock:
+            self._buckets.clear()
+
+
+class RedisStore(RateLimitStore):
+    """Redis 后端：多实例共享计数。
+
+    固定窗口用 `INCR` + `EXPIRE` 实现：首次失败 INCR 返回 1 时设过期（窗口秒），
+    之后累加计数的 TTL 不再刷新——即「首失败时刻 + 窗口」为一个窗口，符合固定窗口语义。
+    窗口到期由 Redis 自动删键，故 `count`/`ttl` 无需自行判断过期。
+
+    仅当 `LOGIN_RATE_LIMIT_REDIS_URL` 非空才构建；redis 延迟导入，避免单实例也强依赖 redis-py。
+    """
+
+    PREFIX = "flowmart:rl:"
+
+    def __init__(self, url: str | None = None, client=None) -> None:
+        if client is not None:
+            self._r = client  # 测试注入（fakeredis 等），不连真服务
+        else:
+            import redis  # 延迟导入：仅启用 Redis 后端时才需要
+
+            self._r = redis.Redis.from_url(url, socket_timeout=2)
+            # 启动时探活：连不上直接报错，避免上线才发现限流失效（fail-fast）
+            try:
+                self._r.ping()
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"登录限流 Redis 后端连不上（{url}）：{exc}。"
+                    "多实例部署需 Redis 共享计数；单实例可留空 LOGIN_RATE_LIMIT_REDIS_URL 用内存实现。"
+                ) from exc
+
+    def _k(self, key: str) -> str:
+        return f"{self.PREFIX}{key}"
+
+    def register_failure(self, key: str, window: int) -> int:
+        k = self._k(key)
+        n = self._r.incr(k)
+        # INCR 原子，只有返回 1 的那次设置过期；后续失败不刷新 TTL（固定窗口语义）
+        if n == 1:
+            self._r.expire(k, window)
+        return n
+
+    def count(self, key: str, window: int) -> int:
+        v = self._r.get(self._k(key))
+        return int(v) if v is not None else 0
+
+    def ttl(self, key: str, window: int) -> int:
+        t = self._r.ttl(self._k(key))
+        # t == -2 键不存在；t == -1 无过期（正常不会触发，因首失败必设 expire）
+        if t is None or t < 0:
+            return window
+        return max(1, t)
+
+    def reset(self, key: str) -> None:
+        self._r.delete(self._k(key))
+
+    def reset_all(self) -> None:
+        # 只清本服务前缀，避免误删其它 key
+        for k in self._r.scan_iter(match=f"{self.PREFIX}*"):
+            self._r.delete(k)
+
+
+def _build_store() -> RateLimitStore:
+    url = settings.LOGIN_RATE_LIMIT_REDIS_URL
+    if url:
+        return RedisStore(url)
+    return MemoryStore()
+
+
+class LoginRateLimiter:
+    """按 (客户端IP, 用户名) 固定窗口计数登录失败次数。"""
+
+    def __init__(self) -> None:
+        # 限流状态必须在进程内跨请求共享（或跨实例经 Redis 共享）才有效
+        self._store = _build_store()
+
+    @staticmethod
+    def _client_ip(request) -> str:
+        # 安全默认：直连取 socket 地址（客户端无法伪造）。
+        # 仅当反向代理已用真实客户端 IP 覆写 X-Forwarded-For 且显式开启
+        # LOGIN_RATE_LIMIT_TRUST_PROXY 时，才信任 XFF 首跳——否则攻击者每次伪造不同
+        # XFF 即可绕过限流（code review P1）。
+        if settings.LOGIN_RATE_LIMIT_TRUST_PROXY:
+            forwarded = request.headers.get("x-forwarded-for")
+            if forwarded:
+                return forwarded.split(",")[0].strip()
+        client = getattr(request, "client", None)
+        return client.host if client else "unknown"
+
+    def _key(self, request, username: str) -> str:
+        return f"{self._client_ip(request)}:{username}"
+
+    def register_failure(self, request, username: str) -> None:
+        self._store.register_failure(self._key(request, username), settings.LOGIN_RATE_LIMIT_WINDOW)
 
     def is_blocked(self, request, username: str) -> bool:
-        with self._lock:
-            b = self._current(self._key(request, username))
-            return b is not None and b.failures >= settings.LOGIN_RATE_LIMIT_MAX
+        return (
+            self._store.count(self._key(request, username), settings.LOGIN_RATE_LIMIT_WINDOW)
+            >= settings.LOGIN_RATE_LIMIT_MAX
+        )
 
     def retry_after(self, request, username: str) -> int:
-        """距离窗口重置还需多少秒（用于 429 的 Retry-After 头）。"""
-        with self._lock:
-            b = self._current(self._key(request, username))
-            if b is None:
-                return settings.LOGIN_RATE_LIMIT_WINDOW
-            remaining = settings.LOGIN_RATE_LIMIT_WINDOW - (
-                time.monotonic() - b.window_start
-            )
-            return max(1, int(remaining))
+        return self._store.ttl(self._key(request, username), settings.LOGIN_RATE_LIMIT_WINDOW)
 
     def reset(self, request, username: str) -> None:
         """登录成功清空计数，避免正常用户刚改完密码就被旧失败数误伤。"""
-        with self._lock:
-            self._buckets.pop(self._key(request, username), None)
+        self._store.reset(self._key(request, username))
 
     def reset_all(self) -> None:
-        """清空全部计数（测试隔离 / 运维手动解封用）。"""
-        with self._lock:
-            self._buckets.clear()
+        self._store.reset_all()
 
 
 # 模块级单例：限流状态必须在进程内跨请求共享才有效。
