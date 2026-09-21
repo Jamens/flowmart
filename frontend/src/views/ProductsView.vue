@@ -9,7 +9,9 @@
         @keyup.enter="load"
         @clear="load"
       />
-      <!-- 传空 status = 不筛选，这样下架商品也能在管理页看到并重新上架 -->
+      <!-- 传空 status = 不筛选，这样下架商品也能在管理页看到并重新上架。
+           注意必须「发出」空值而不是省略参数：后端 status 默认值是 on_sale，
+           省略会被套用默认值，把下架商品筛掉（见 api.js listProducts）。 -->
       <el-select v-model="status" style="width: 150px" @change="load">
         <el-option label="全部（含下架）" value="" />
         <el-option label="仅在售" value="on_sale" />
@@ -76,7 +78,8 @@
     <el-dialog v-model="createVisible" title="新建商品" width="720px">
       <el-form label-width="90px">
         <el-form-item label="商品名称" required>
-          <el-input v-model="form.name" placeholder="必填" />
+          <!-- maxlength 与后端一致（1-128），超长会被 422 拒掉 -->
+          <el-input v-model="form.name" placeholder="必填" maxlength="128" show-word-limit />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -107,7 +110,8 @@
       <el-table :data="form.skus" size="small" border>
         <el-table-column label="SKU 编码" width="160">
           <template #default="{ row }">
-            <el-input v-model="row.sku_code" size="small" placeholder="唯一" />
+            <!-- 上限 64 与后端一致；sku_code 重复会被后端 400 拒掉 -->
+            <el-input v-model="row.sku_code" size="small" placeholder="唯一" maxlength="64" />
           </template>
         </el-table-column>
         <el-table-column label="规格">
@@ -169,7 +173,8 @@ import { api } from '../api'
 const list = ref([])
 const loading = ref(false)
 const keyword = ref('')
-// 空字符串 = 不按状态筛选（后端 `if status:` 才加 where），便于管理下架商品
+// 空字符串 = 不按状态筛选（后端 `if status:` 为假则不加 where）。
+// 必须显式发出该空值，省略参数会被后端默认值 on_sale 套用。
 const status = ref('')
 const categories = ref([])
 const createVisible = ref(false)
@@ -225,6 +230,9 @@ async function submitCreate() {
   const skus = f.skus.filter((s) => s.sku_code.trim())
   if (!skus.length) return ElMessage.warning('至少填写一个 SKU 编码')
   if (skus.some((s) => !(s.price > 0))) return ElMessage.warning('SKU 价格必须大于 0')
+  // 未填编码的行会被跳过：明确告知，避免用户以为填的内容都提交了
+  const dropped = f.skus.length - skus.length
+  if (dropped) ElMessage.warning(`已忽略 ${dropped} 个未填编码的 SKU 行`)
 
   try {
     await api.createProduct({

@@ -23,8 +23,16 @@ async function request(path, options = {}) {
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     const d = data.detail
+    // 422 时 detail 是校验错误数组（[{loc, msg, type}]），不是字符串，
+    // 不单独处理的话会一律退化成没用的「请求失败」
     const msg =
-      typeof d === 'string' ? d : d?.message ? `${d.message}：${(d.errors || []).join('；')}` : '请求失败'
+      typeof d === 'string'
+        ? d
+        : Array.isArray(d)
+          ? d.map((x) => x.msg || JSON.stringify(x)).join('；')
+          : d?.message
+            ? `${d.message}：${(d.errors || []).join('；')}`
+            : '请求失败'
     throw new Error(msg)
   }
   return data
@@ -61,10 +69,12 @@ export const api = {
     request('/cart/checkout', { method: 'POST', body: JSON.stringify(payload || {}) }),
 
   // 商品
-  // keyword / status 由后端支持；空值不拼进 query，避免 status='' 把结果筛没
+  // 只丢弃 null/undefined，**空字符串必须保留并发出去**：
+  // 后端 status 的默认值是 "on_sale"，若省略该参数，FastAPI 会套用默认值把下架商品筛掉，
+  // 于是「全部（含下架）」会退化成「仅在售」。显式发 `status=` 才能让后端 `if status:` 为假。
   listProducts: (params = {}) => {
     const qs = new URLSearchParams(
-      Object.entries(params).filter(([, v]) => v !== '' && v != null)
+      Object.entries(params).filter(([, v]) => v != null)
     ).toString()
     return request(`/products${qs ? `?${qs}` : ''}`)
   },
