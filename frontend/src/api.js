@@ -61,7 +61,21 @@ export const api = {
     request('/cart/checkout', { method: 'POST', body: JSON.stringify(payload || {}) }),
 
   // 商品
-  listProducts: () => request('/products'),
+  // keyword / status 由后端支持；空值不拼进 query，避免 status='' 把结果筛没
+  listProducts: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== '' && v != null)
+    ).toString()
+    return request(`/products${qs ? `?${qs}` : ''}`)
+  },
+  createProduct: (payload) =>
+    request('/products', { method: 'POST', body: JSON.stringify(payload) }),
+  // on_sale 是 query 参数，不是 body
+  setShelf: (id, onSale) =>
+    request(`/products/${id}/shelf?on_sale=${onSale}`, { method: 'PATCH' }),
+
+  // 分类
+  listCategories: () => request('/categories'),
 
   // 收货地址（必须走 /users/{id}/addresses：用户详情不返回地址，避免 PII 泄露）
   listAddresses: (userId) => request(`/users/${userId}/addresses`),
