@@ -84,14 +84,14 @@ def _ensure_admin_column(engine, dialect: str) -> None:
 
 
 def _backfill_admin(engine) -> None:
-    """开发便利：把演示管理员 zhangsan 标记为 is_admin，避免存量库无管理员可用。"""
+    """开发便利：把配置的初始管理员（settings.BOOTSTRAP_ADMIN）标记为 is_admin，避免存量库无管理员可用。"""
     Session = sessionmaker(bind=engine)
     with Session() as s:
-        admin = s.execute(select(User).where(User.username == "zhangsan")).scalars().first()
+        admin = s.execute(select(User).where(User.username == settings.BOOTSTRAP_ADMIN)).scalars().first()
         if admin and not admin.is_admin:
             admin.is_admin = True
             s.commit()
-            print("[init_db] 已将 zhangsan 设为管理员")
+            print(f"[init_db] 已将 {settings.BOOTSTRAP_ADMIN} 设为管理员")
 
 
 def main() -> None:
@@ -148,7 +148,7 @@ def main() -> None:
     # 生产环境应改成强制用户走「首次登录设置密码」，这里仅本地演示用。
     _backfill_demo_passwords(engine)
 
-    # 开发便利：把演示管理员 zhangsan 标记为 is_admin，避免存量库无管理员可用。
+    # 开发便利：把配置的初始管理员（settings.BOOTSTRAP_ADMIN）标记为 is_admin，避免存量库无管理员可用。
     _backfill_admin(engine)
 
     tables = sorted(Base.metadata.tables.keys())

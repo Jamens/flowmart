@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "dev-only-insecure-secret-change-me"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 默认 1 天
 
+    # 初始管理员用户名：首次 seed / 迁移（init_db、seed）时把该用户提升为管理员。
+    # 生产务必改为真实管理员账号，切勿沿用演示值 zhangsan。
+    BOOTSTRAP_ADMIN: str = "zhangsan"
+
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306
@@ -43,6 +47,14 @@ class Settings(BaseSettings):
         # 生产（非 debug）下仍用开发默认密钥意味着任何人都能伪造令牌，必须启动即报错
         if not self.DEBUG and self.SECRET_KEY == "dev-only-insecure-secret-change-me":
             raise ValueError("生产环境必须设置强随机 SECRET_KEY，当前仍为开发默认值")
+        return self
+
+    @model_validator(mode="after")
+    def _require_bootstrap_admin(self):
+        # 空值意味着「谁都不提升为管理员」，系统会静默锁死、再无 API 能授出管理员。
+        # 配置错误必须在启动时暴露，而不是运行时悄悄变成不可用。
+        if not self.BOOTSTRAP_ADMIN or not self.BOOTSTRAP_ADMIN.strip():
+            raise ValueError("BOOTSTRAP_ADMIN 不能为空：必须指定一个初始管理员用户名")
         return self
 
     @property
