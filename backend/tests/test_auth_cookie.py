@@ -38,7 +38,10 @@ def test_cors_rejects_unknown_origin(raw_client):
     # 用真实存在的 /health 端点；未知源不应被回显，杜绝任意站点带凭据跨域调用
     r = raw_client.get("/health", headers={"Origin": "http://evil.example.com"})
     assert r.status_code == 200
-    assert r.headers.get("access-control-allow-origin") != "http://evil.example.com"
+    # Starlette 对非白名单源根本不回显该头（而非回显错误值），用 is None 表达真实安全意图；
+    # 注意：allow-credentials 头会随 allow_credentials=True 配置始终输出 true，但它单独出现无危害——
+    # 浏览器仅在 allow-origin 精确匹配时才允许携带凭据，未知源无匹配的 allow-origin 即被拦截。
+    assert r.headers.get("access-control-allow-origin") is None
 
 
 def test_logout_clears_cookie(raw_client):
