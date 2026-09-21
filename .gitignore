@@ -15,10 +15,15 @@ htmlcov/
 .env
 .env.local
 
+# WorkBuddy 工作区数据（memory 等，按个人提交规范排除）
+.workbuddy/
+
 # Database
 *.sqlite3
 *.db
-flowmart.db
+# 例外：开发用 SQLite 需要在文件树可见。
+# 注意：可见 ≠ 应提交，提交时请勿 git add 该二进制文件。
+!flowmart.db
 
 # Node
 node_modules/
@@ -38,3 +43,4 @@ Thumbs.db
 # Logs
 *.log
 logs/
+node_modules_pnpm_bak/
