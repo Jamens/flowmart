@@ -120,3 +120,21 @@ def test_admin_db_rejects_write_sql(client):
 def test_admin_db_rejects_unknown_table(client):
     r = client.get("/api/v1/admin/db/tables/not_exist")
     assert r.status_code == 404
+
+
+def test_list_products_requires_auth(raw_client):
+    """商品列表也必须登录：README 约定除 /health 与 auth 外所有接口都要凭证。
+
+    该接口此前漏了 get_current_user 依赖，与文档契约不符。
+    """
+    r = raw_client.get("/api/v1/products")
+    assert r.status_code == 401
+
+
+def test_toggle_shelf_requires_auth(raw_client, sku):
+    """上下架是运营操作，未登录必须 401。
+
+    否则任何人无需登录就能把商品下架，直接影响业务可用性。
+    """
+    r = raw_client.patch(f"/api/v1/products/{sku.product_id}/shelf?on_sale=false")
+    assert r.status_code == 401

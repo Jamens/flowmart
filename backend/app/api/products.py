@@ -52,7 +52,12 @@ class ProductOut(BaseModel):
 
 @router.get("", response_model=list[ProductOut], summary="商品列表（含 SKU）")
 def list_products(
-    keyword: str = "", status: str = "on_sale", db: Session = Depends(get_db)
+    keyword: str = "",
+    status: str = "on_sale",
+    # 补鉴权：README 约定「除 /health 与 auth 外所有接口都必须携带身份凭证」，
+    # 此前该接口（以及下面的上下架）漏了依赖，未登录也能调用
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     stmt = select(Product).options(selectinload(Product.skus))
     if keyword:
@@ -129,7 +134,13 @@ def create_product(
 
 
 @router.patch("/{product_id}/shelf", summary="上架/下架")
-def toggle_shelf(product_id: int, on_sale: bool = True, db: Session = Depends(get_db)):
+def toggle_shelf(
+    product_id: int,
+    on_sale: bool = True,
+    # 上下架是运营操作：未登录即可调用的话，任何人都能把商品下架，必须鉴权
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="商品不存在")
