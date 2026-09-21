@@ -68,6 +68,32 @@ def _backfill_demo_passwords(engine) -> None:
         print(f"[init_db] 为 {len(empties)} 个无密码用户设置演示密码（123456）")
 
 
+def _ensure_admin_column(engine, dialect: str) -> None:
+    """为已存在的 users 表补 is_admin 列（create_all 不会动存量表）。"""
+    insp = inspect(engine)
+    cols = [c["name"] for c in insp.get_columns("users")]
+    if "is_admin" in cols:
+        return
+    with engine.begin() as conn:
+        if dialect == "mysql":
+            # TINYINT(1) 即布尔；NOT NULL 必须有默认值，否则存量行无法填充
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin TINYINT(1) NOT NULL DEFAULT 0"))
+        else:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"))
+    print("[init_db] 已为 users 表补充 is_admin 字段")
+
+
+def _backfill_admin(engine) -> None:
+    """开发便利：把演示管理员 zhangsan 标记为 is_admin，避免存量库无管理员可用。"""
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        admin = s.execute(select(User).where(User.username == "zhangsan")).scalars().first()
+        if admin and not admin.is_admin:
+            admin.is_admin = True
+            s.commit()
+            print("[init_db] 已将 zhangsan 设为管理员")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="初始化 flowmart 数据库")
     parser.add_argument(
@@ -115,9 +141,15 @@ def main() -> None:
     # 否则登录接口读 users.password_hash 会报「Unknown column」。
     _ensure_password_column(engine, dialect)
 
+    # 同样补齐 RBAC 所需的 is_admin 列
+    _ensure_admin_column(engine, dialect)
+
     # 开发便利：为没有密码的用户回填演示密码 123456，避免存量账号无法登录。
     # 生产环境应改成强制用户走「首次登录设置密码」，这里仅本地演示用。
     _backfill_demo_passwords(engine)
+
+    # 开发便利：把演示管理员 zhangsan 标记为 is_admin，避免存量库无管理员可用。
+    _backfill_admin(engine)
 
     tables = sorted(Base.metadata.tables.keys())
     print(f"[init_db] 建表完成，共 {len(tables)} 张表：")

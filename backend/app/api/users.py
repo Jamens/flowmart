@@ -10,7 +10,10 @@
    路径里的 user_id 必须等于令牌用户，否则一律 404。
    这样「越权访问他人地址」在接口形状上就不可能发生 —— 从购物车越权 bug 学到的教训。
 
-用户自身的增删改查接口为管理后台视角，仅要求登录（后续可加管理员角色进一步限制）。
+RBAC（角色权限，已落地）：
+- 用户管理（建/列/禁用账号）与订单流转推进仅管理员可执行（require_admin 闸门）；
+- 普通买家只能改**自己**的资料、只看**自己**的订单；
+- 越权访问他人资源统一返回 404，不泄露「该用户是否存在」。
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -18,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.ecommerce import Address, User
 
 router = APIRouter(prefix="/users", tags=["用户与地址"])
@@ -106,10 +109,10 @@ def _set_default_address(db: Session, user_id: int, target: Address) -> None:
 # ---------------- 用户 ----------------
 
 
-@router.get("", summary="用户列表")
+@router.get("", summary="用户列表（仅管理员）")
 def list_users(
     active_only: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     stmt = select(User).order_by(User.id)
@@ -128,10 +131,10 @@ def list_users(
     ]
 
 
-@router.post("", status_code=201, summary="创建用户")
+@router.post("", status_code=201, summary="创建用户（仅管理员）")
 def create_user(
     payload: UserIn,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     from app.core.security import hash_password
@@ -155,7 +158,7 @@ def create_user(
     return {"id": user.id, "username": user.username}
 
 
-@router.get("/{user_id}", summary="用户详情")
+@router.get("/{user_id}", summary="用户详情（本人或管理员）")
 def get_user(
     user_id: int,
     current_user: User = Depends(get_current_user),
@@ -163,7 +166,10 @@ def get_user(
 ):
     # 注意：不在此返回收货地址 —— 地址含 receiver/手机/详细地址等敏感信息，
     # 应通过归属校验的 /users/{id}/addresses 获取，避免任何登录用户读到他人地址。
+    # 他人资料对非管理员不可见：统一 404，不泄露「该用户是否存在」。
     u = _get_user(db, user_id)
+    if current_user.id != user_id and not current_user.is_admin:
+        raise HTTPException(status_code=404, detail="用户不存在")
     return {
         "id": u.id,
         "username": u.username,
@@ -173,7 +179,7 @@ def get_user(
     }
 
 
-@router.patch("/{user_id}", summary="更新用户")
+@router.patch("/{user_id}", summary="更新用户（本人改资料 / 管理员可改全部）")
 def update_user(
     user_id: int,
     payload: UserUpdateIn,
@@ -181,7 +187,14 @@ def update_user(
     db: Session = Depends(get_db),
 ):
     u = _get_user(db, user_id)
-    for field in ("nickname", "phone", "is_active"):
+    # 本人：仅可改昵称/手机；管理员：可改昵称/手机/启用状态；其他人 404。
+    if current_user.id == user_id:
+        allowed = ("nickname", "phone")
+    elif current_user.is_admin:
+        allowed = ("nickname", "phone", "is_active")
+    else:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    for field in allowed:
         value = getattr(payload, field)
         if value is not None:
             setattr(u, field, value)
@@ -189,14 +202,16 @@ def update_user(
     return {"id": u.id, "nickname": u.nickname, "is_active": u.is_active}
 
 
-@router.delete("/{user_id}", summary="禁用用户（软删除）")
+@router.delete("/{user_id}", summary="禁用用户（软删除，仅管理员）")
 def delete_user(
     user_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """不物理删除：订单等历史数据仍引用该用户。"""
+    """不物理删除：订单等历史数据仍引用该用户。仅管理员可执行。"""
     u = _get_user(db, user_id)
+    if u.id == current_user.id:
+        raise HTTPException(status_code=400, detail="不能禁用当前登录的管理员账号")
     u.is_active = False
     db.commit()
     return {"id": u.id, "is_active": False}

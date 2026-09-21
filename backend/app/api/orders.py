@@ -4,8 +4,8 @@
 新增流程事件时不需要改 API 代码，由服务层与流程定义决定支持哪些 event。
 
 鉴权：所有接口都必须登录。下单时订单归属固定为当前登录用户（get_current_user），
-不再信任请求体里的 user_id —— 这是防冒充下单的关键。订单列表/详情对登录用户开放
-（管理后台视角），但「以谁的身份下单」这一写操作只能由令牌决定。
+不再信任请求体里的 user_id —— 这是防冒充下单的关键。订单列表/详情对非管理员
+按 user_id 收口为「仅自己的订单」；推进订单流转（actions）属于后台运营操作，仅管理员可执行。
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.ecommerce import Order, User
 from app.services.order_service import OrderService
 from app.services.workflow_engine import WorkflowError
@@ -76,7 +76,7 @@ def _serialize(order: Order, svc: OrderService) -> dict:
     }
 
 
-@router.get("", summary="订单列表（登录用户可见全部，供管理后台）")
+@router.get("", summary="订单列表（管理员见全部 / 买家仅见自己）")
 def list_orders(
     status: str = "",
     current_user: User = Depends(get_current_user),
@@ -85,6 +85,9 @@ def list_orders(
     stmt = select(Order).options(selectinload(Order.items))
     if status:
         stmt = stmt.where(Order.status == status)
+    # 非管理员只能看自己的订单，避免任意买家遍历全平台订单（PII / 越权）
+    if not current_user.is_admin:
+        stmt = stmt.where(Order.user_id == current_user.id)
     orders = db.execute(stmt.order_by(Order.id.desc())).scalars().unique().all()
     svc = OrderService(db)
     return [_serialize(o, svc) for o in orders]
@@ -100,6 +103,9 @@ def get_order(
         select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
     ).scalars().unique().first()
     if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    # 非管理员只能看自己的订单；他人的订单统一 404，不泄露存在性
+    if not current_user.is_admin and order.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="订单不存在")
     return _serialize(order, OrderService(db))
 
@@ -124,12 +130,12 @@ def create_order(
     return _serialize(order, svc)
 
 
-@router.post("/{order_id}/actions/{event}", summary="推进订单流转")
+@router.post("/{order_id}/actions/{event}", summary="推进订单流转（仅管理员）")
 def fire_event(
     order_id: int,
     event: str,
     payload: ActionIn = ActionIn(),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     order = db.get(Order, order_id)

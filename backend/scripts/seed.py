@@ -19,6 +19,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from sqlalchemy import select  # noqa: E402
 
 from app.core.database import SessionLocal  # noqa: E402
+from app.core.security import hash_password  # noqa: E402
 from app.models.ecommerce import (  # noqa: E402
     Address,
     Category,
@@ -191,6 +192,8 @@ def seed_users(db) -> tuple[int, int, int]:
             )
             db.add(user)
             db.flush()
+        # zhangsan 为演示管理员（RBAC），其余为普通买家
+        user.is_admin = username == "zhangsan"
         users[username] = user.id
 
     addr_id = None

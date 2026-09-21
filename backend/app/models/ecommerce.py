@@ -45,6 +45,9 @@ class User(TimestampMixin, Base):
     # 密码哈希，格式见 app/core/security.hash_password；留空表示尚未设置密码
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 是否管理员：RBAC 角色闸门（require_admin）的依据。普通用户只能操作自己的资源，
+    # 建账号 / 禁用用户 / 推进订单流转等管理操作仅管理员可执行。
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
 
 class Address(TimestampMixin, Base):

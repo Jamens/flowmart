@@ -44,7 +44,7 @@ def engine(db):
 def current_user(db):
     """一个已注册（有密码）的默认登录用户，供接口测试充当「当前用户」。"""
     u = User(username="tester", nickname="测试员", phone="13800000000",
-             password_hash=hash_password("123456"))
+             password_hash=hash_password("123456"), is_admin=True)
     db.add(u)
     db.commit()
     db.refresh(u)

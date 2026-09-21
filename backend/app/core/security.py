@@ -135,3 +135,15 @@ def get_current_user(
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="用户不存在或已禁用")
     return user
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """管理员角色闸门：非管理员一律 403。
+
+    用于用户管理、订单流转等「只有后台运营可做的操作」。
+    与 get_current_user（身份取自令牌）配合，把越权从接口形状上堵死——
+    普通买家既拿不到管理入口，也无法通过改 URL 里的 id 越权。
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return current_user
