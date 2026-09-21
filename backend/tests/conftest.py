@@ -89,6 +89,35 @@ def raw_client(db, order_flow):
 
 
 @pytest.fixture
+def buyer_user(db):
+    """一个已注册的普通买家（非管理员），供测试买家侧行为。"""
+    u = User(username="buyer", nickname="买家", phone="13800000003",
+             password_hash=hash_password("123456"), is_admin=False)
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
+
+
+@pytest.fixture
+def buyer_client(db, order_flow, buyer_user):
+    """已「登录」的非管理员客户端：在依赖注入（覆盖 get_current_user）路径下验证买家侧行为，
+    补足 conftest 默认 current_user 为管理员导致的买家路径覆盖缺口（与 raw_client 真实鉴权路径互补）。"""
+    from fastapi.testclient import TestClient
+
+    from app.core.database import get_db
+    from app.main import app
+
+    state = {"user": buyer_user}
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: state["user"]
+    with TestClient(app) as c:
+        c.user = buyer_user
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def order_flow(db):
     """建一条订单流程定义：start → 待付款 → 待发货 → 已发货 → 已完成。
 
