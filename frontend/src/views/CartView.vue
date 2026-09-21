@@ -16,7 +16,8 @@
           :value="s.id"
         />
       </el-select>
-      <el-input-number v-model="addQty" :min="1" :max="selectedStock || 999" />
+      <!-- 未选 SKU 时不限制上限；选中后以库存为上限（库存 0 时下限取 1，由后端最终裁决） -->
+      <el-input-number v-model="addQty" :min="1" :max="skuId ? Math.max(selectedStock, 1) : 999" />
       <el-button type="primary" @click="addItem">加入购物车</el-button>
       <el-button @click="load">刷新</el-button>
     </div>
@@ -29,13 +30,20 @@
       </el-table-column>
       <el-table-column label="数量" width="170">
         <template #default="{ row }">
-          <!-- 不用 v-model：先改本地值再调接口，失败时 UI 与后端会不一致。
-               这里受控渲染，成功才回写，失败则整体 reload 回滚。 -->
+          <!-- 必须用 v-model（乐观更新）而非受控 :model-value：
+               el-input-number 内部持有 currentValue，只在 modelValue 这个 prop
+               真的发生变化时才重新同步。受控写法下请求失败时 prop 没变，
+               组件内部会一直停留在被拒绝的数字上，load() 也拉不回来。
+               改为 v-model 后，失败时 load() 会把服务端真实值写回 prop，
+               prop 变化即触发内部同步，UI 自动回滚。 -->
           <el-input-number
-            :model-value="row.quantity"
+            v-model="row.quantity"
             :min="1"
-            :max="row.stock || 999"
+            :max="Math.max(row.stock, 1)"
+            :value-on-clear="1"
+            :disabled="busy[row.id]"
             size="small"
+            aria-label="数量"
             @change="(v) => changeQty(row, v)"
           />
         </template>
@@ -84,7 +92,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api'
 
@@ -95,6 +103,9 @@ const skuId = ref(null)
 const addQty = ref(1)
 const addresses = ref([])
 const addressId = ref(null)
+// 行级「请求进行中」标记：连点 +/- 会并发发出多个 PATCH，响应乱序回来会把
+// 过期值写回 UI。进行中禁用该行输入，保证一次只飞一个请求。
+const busy = reactive({})
 
 // 合计本地计算：改数量后立刻同步，避免依赖后端返回的 total（改数量后已过期）
 const total = computed(() =>
@@ -116,18 +127,23 @@ async function load() {
   }
 }
 
-async function loadSkuOptions() {
-  if (skuOptions.value.length) return
+async function loadSkuOptions(force = false) {
+  // force=true 用于加购后刷新库存上限；默认有缓存就直接用
+  if (skuOptions.value.length && !force) return
   try {
     const products = await api.listProducts()
     skuOptions.value = products.flatMap((p) =>
-      p.skus.map((s) => ({
-        id: s.id,
-        spec: s.spec,
-        price: s.price,
-        stock: s.stock,
-        productName: p.name,
-      }))
+      // 只列在售 SKU：后端对下架 SKU 会直接 400「已下架」，
+      // 与其让用户选了再报错，不如一开始就不列出来
+      p.skus
+        .filter((s) => s.status === 'on_sale')
+        .map((s) => ({
+          id: s.id,
+          spec: s.spec,
+          price: s.price,
+          stock: s.stock,
+          productName: p.name,
+        }))
     )
   } catch (e) {
     ElMessage.error(e.message)
@@ -154,22 +170,33 @@ async function addItem() {
     ElMessage.success('已加入购物车')
     addQty.value = 1
     await load()
-    await loadSkuOptions() // 库存可能变化，刷新可选数量上限
+    await loadSkuOptions(true) // 库存可能变化，强制刷新可选数量上限
   } catch (e) {
     ElMessage.error(e.message)
   }
 }
 
 async function changeQty(row, value) {
-  if (value === row.quantity) return
+  // 清空输入框时可能为 null（value-on-clear 已兜底为 1，这里再防御一次）
+  if (value == null || Number.isNaN(value)) {
+    await load()
+    return
+  }
+  // 注意：不能加 `if (value === row.quantity) return` —— v-model 在 @change 触发前
+  // 已经把 row.quantity 改成新值了，加上这句会导致永远不发请求。
+  if (busy[row.id]) return // 进行中：忽略连点，避免乱序回写
+  busy[row.id] = true
   try {
     // 传 0 等价于删除该行；这里最小值为 1，故只可能是改数量
     await api.updateCartItem(row.id, { quantity: value })
-    row.quantity = value
     row.subtotal = +(row.price * value).toFixed(2)
   } catch (e) {
     ElMessage.error(e.message)
-    await load() // 回滚到后端真实值
+    // v-model 已乐观更新本地值；load() 把服务端真实值写回 prop，
+    // prop 变化即触发组件内部同步，UI 自动回滚到真实值
+    await load()
+  } finally {
+    busy[row.id] = false
   }
 }
 
@@ -180,6 +207,8 @@ async function removeItem(row) {
     await load()
   } catch (e) {
     ElMessage.error(e.message)
+    // 例如该行已在别处被删（404）：必须刷新，否则残留一行幽灵数据
+    await load()
   }
 }
 
@@ -212,9 +241,8 @@ async function doCheckout() {
 }
 
 onMounted(async () => {
-  await load()
-  await loadSkuOptions()
-  await loadAddresses()
+  // 三者互不依赖，并发拉取减少串行等待
+  await Promise.all([load(), loadSkuOptions(), loadAddresses()])
 })
 </script>
 
