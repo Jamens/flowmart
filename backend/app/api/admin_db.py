@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.ecommerce import User
 
 router = APIRouter(prefix="/admin/db", tags=["db-admin"])
@@ -81,7 +81,14 @@ def _pk_columns(insp, table: str) -> list[str]:
 
 
 @router.get("/tables/{name}", summary="表结构 + 数据预览")
-def read_table(name: str, limit: int = 100, db: Session = Depends(get_db)):
+def read_table(
+    name: str,
+    limit: int = 100,
+    # 这个接口会返回表的真实数据（含 users.password_hash 等），
+    # 不能只要求登录 —— 否则任何买家都能拖走全库数据。故用管理员闸门。
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     insp = inspect(db.bind)
     tbl = _assert_table(insp, name)
     limit = max(1, min(limit, 500))
@@ -111,7 +118,12 @@ def read_table(name: str, limit: int = 100, db: Session = Depends(get_db)):
 
 
 @router.post("/query", summary="执行只读 SQL")
-def run_query(payload: QueryIn, db: Session = Depends(get_db)):
+def run_query(
+    payload: QueryIn,
+    # 任意 SELECT 能拖走全库（含密码哈希），必须是管理员
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     sql = payload.sql.strip().rstrip(";")
     if _FORBIDDEN.search(sql):
         raise HTTPException(status_code=400, detail="只允许 SELECT / PRAGMA / EXPLAIN 查询")

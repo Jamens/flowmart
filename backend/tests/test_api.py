@@ -152,6 +152,33 @@ def test_list_categories_requires_auth(raw_client):
     assert raw_client.get("/api/v1/categories/tree").status_code == 401
 
 
+def test_workflow_definition_endpoints_require_auth(raw_client):
+    """流程定义直接驱动订单状态机，创建/修改/归档绝不能匿名调用。
+
+    这 5 个端点此前完全没有鉴权依赖。
+    """
+    payload = {"code": "x", "name": "x", "nodes": [], "transitions": []}
+    assert raw_client.get("/api/v1/workflows/definitions/1").status_code == 401
+    assert raw_client.get("/api/v1/workflows/definitions/code/order_flow").status_code == 401
+    assert raw_client.post("/api/v1/workflows/definitions", json=payload).status_code == 401
+    assert raw_client.put("/api/v1/workflows/definitions/1", json=payload).status_code == 401
+    assert raw_client.delete("/api/v1/workflows/definitions/1").status_code == 401
+
+
+def test_admin_db_data_endpoints_require_admin(buyer_client):
+    """表数据预览 / 只读 SQL 能拖走全库（含 users.password_hash），必须管理员。"""
+    assert buyer_client.get("/api/v1/admin/db/tables/users").status_code == 403
+    r = buyer_client.post("/api/v1/admin/db/query", json={"sql": "select * from users"})
+    assert r.status_code == 403
+
+
+def test_admin_db_data_accessible_by_admin(client):
+    """反向断言：管理员仍可正常读取，避免把闸门收得过头。"""
+    assert client.get("/api/v1/admin/db/tables/users").status_code == 200
+    r = client.post("/api/v1/admin/db/query", json={"sql": "select id from users"})
+    assert r.status_code == 200, r.text
+
+
 def test_update_category_ignores_explicit_null_sort(client):
     """前端清空数字输入框会显式传 sort=null。
 

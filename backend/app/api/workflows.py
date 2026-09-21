@@ -93,7 +93,11 @@ def list_definitions(current_user: User = Depends(get_current_user), db: Session
 
 
 @router.get("/definitions/{definition_id}", summary="流程定义图（设计器加载用）")
-def get_definition(definition_id: int, db: Session = Depends(get_db)):
+def get_definition(
+    definition_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     definition = db.get(WorkflowDefinition, definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="流程定义不存在")
@@ -101,7 +105,9 @@ def get_definition(definition_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/definitions/code/{code}", summary="按 code 取已发布流程")
-def get_definition_by_code(code: str, db: Session = Depends(get_db)):
+def get_definition_by_code(
+    code: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     definition = db.execute(
         select(WorkflowDefinition)
         .where(WorkflowDefinition.code == code, WorkflowDefinition.status == "published")
@@ -113,7 +119,11 @@ def get_definition_by_code(code: str, db: Session = Depends(get_db)):
 
 
 @router.post("/definitions", status_code=201, summary="创建流程定义")
-def create_definition(payload: DefinitionIn, db: Session = Depends(get_db)):
+def create_definition(
+    payload: DefinitionIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if db.execute(
         select(WorkflowDefinition).where(WorkflowDefinition.code == payload.code)
     ).scalars().first():
@@ -132,7 +142,10 @@ def create_definition(payload: DefinitionIn, db: Session = Depends(get_db)):
 
 @router.put("/definitions/{definition_id}", summary="更新流程定义（全量替换图）")
 def update_definition(
-    definition_id: int, payload: DefinitionIn, db: Session = Depends(get_db)
+    definition_id: int,
+    payload: DefinitionIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     definition = db.get(WorkflowDefinition, definition_id)
     if definition is None:
@@ -179,7 +192,11 @@ def publish_definition(definition_id: int, current_user: User = Depends(get_curr
 
 
 @router.delete("/definitions/{definition_id}", summary="归档流程定义")
-def archive_definition(definition_id: int, db: Session = Depends(get_db)):
+def archive_definition(
+    definition_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     definition = db.get(WorkflowDefinition, definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="流程定义不存在")
