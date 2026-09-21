@@ -10,6 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.security import get_current_user
+from app.models.ecommerce import User
 from app.models.workflow import (
     WorkflowDefinition,
     WorkflowInstance,
@@ -82,7 +84,7 @@ def _graph(definition: WorkflowDefinition, db: Session) -> dict:
 
 
 @router.get("/definitions", summary="流程定义列表")
-def list_definitions(db: Session = Depends(get_db)):
+def list_definitions(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     defs = db.execute(select(WorkflowDefinition).order_by(WorkflowDefinition.id)).scalars().all()
     return [
         {"id": d.id, "code": d.code, "name": d.name, "version": d.version, "status": d.status}
@@ -147,7 +149,7 @@ def update_definition(
 
 
 @router.post("/definitions/{definition_id}/publish", summary="发布流程定义")
-def publish_definition(definition_id: int, db: Session = Depends(get_db)):
+def publish_definition(definition_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     definition = db.get(WorkflowDefinition, definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="流程定义不存在")

@@ -8,7 +8,7 @@
 """
 import pytest
 
-from app.models.ecommerce import Category, Product, Sku
+from app.models.ecommerce import Category, Product, Sku, User
 
 
 def create_user(client, username, **kw):
@@ -51,7 +51,7 @@ def test_update_user(client):
 
 
 def test_add_address(client):
-    uid = create_user(client, "addr").json()["id"]
+    uid = client.user.id
     r = client.post(
         f"/api/v1/users/{uid}/addresses",
         json={"receiver": "张三", "phone": "13800000000", "city": "深圳"},
@@ -64,7 +64,7 @@ def test_add_address(client):
 
 def test_default_address_is_exclusive(client):
     """默认地址只能有一个：设置新的默认后，旧的必须自动取消。"""
-    uid = create_user(client, "def").json()["id"]
+    uid = client.user.id
     base = {"receiver": "张三", "phone": "13800000000", "city": "深圳"}
     client.post(f"/api/v1/users/{uid}/addresses", json={**base, "is_default": True})
     client.post(f"/api/v1/users/{uid}/addresses", json={**base, "is_default": True})
@@ -76,25 +76,32 @@ def test_default_address_is_exclusive(client):
     assert addrs[1]["is_default"] is True
 
 
-def test_cannot_touch_other_users_address(client):
-    """user_id 在路径里，改/删他人地址应 404。"""
-    u1 = create_user(client, "owner").json()["id"]
-    u2 = create_user(client, "other").json()["id"]
+def test_cannot_touch_other_users_address(client, db):
+    """地址归属令牌用户：以他人身份访问其地址应 404（_assert_owner 拦截）。"""
+    u1_id = create_user(client, "owner").json()["id"]
+    u2_id = create_user(client, "other").json()["id"]
+
+    # 以 u1 的身份创建地址
+    client.as_user(db.get(User, u1_id))
     addr_id = client.post(
-        f"/api/v1/users/{u1}/addresses",
+        f"/api/v1/users/{u1_id}/addresses",
         json={"receiver": "张三", "phone": "13800000000"},
     ).json()["id"]
 
+    # 以 u2 的身份尝试改/删 u1 的地址 -> 404
+    client.as_user(db.get(User, u2_id))
     assert client.patch(
-        f"/api/v1/users/{u2}/addresses/{addr_id}", json={"receiver": "黑客"}
+        f"/api/v1/users/{u1_id}/addresses/{addr_id}", json={"receiver": "黑客"}
     ).status_code == 404
-    assert client.delete(f"/api/v1/users/{u2}/addresses/{addr_id}").status_code == 404
-    # 原地址不受影响
-    assert client.get(f"/api/v1/users/{u1}/addresses").json()[0]["receiver"] == "张三"
+    assert client.delete(f"/api/v1/users/{u1_id}/addresses/{addr_id}").status_code == 404
+
+    # 以 u1 身份回看，原地址不受影响
+    client.as_user(db.get(User, u1_id))
+    assert client.get(f"/api/v1/users/{u1_id}/addresses").json()[0]["receiver"] == "张三"
 
 
 def test_delete_address(client):
-    uid = create_user(client, "del_addr").json()["id"]
+    uid = client.user.id
     addr_id = client.post(
         f"/api/v1/users/{uid}/addresses",
         json={"receiver": "张三", "phone": "13800000000"},

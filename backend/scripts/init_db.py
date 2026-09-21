@@ -13,11 +13,14 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import create_engine, text  # noqa: E402
+from sqlalchemy import create_engine, inspect, select, text  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base  # noqa: E402
+from app.core.security import hash_password  # noqa: E402
 from app.models import ecommerce, workflow  # noqa: F401,E402  导入即注册表
+from app.models.ecommerce import User  # noqa: E402
 
 
 def ensure_mysql_database(url: str) -> None:
@@ -33,6 +36,36 @@ def ensure_mysql_database(url: str) -> None:
         conn.commit()
     engine.dispose()
     print(f"[init_db] 数据库 `{settings.DB_NAME}` 已就绪")
+
+
+def _ensure_password_column(engine, dialect: str) -> None:
+    """为已存在的 users 表补 password_hash 列（create_all 不会动存量表）。"""
+    insp = inspect(engine)
+    cols = [c["name"] for c in insp.get_columns("users")]
+    if "password_hash" in cols:
+        return
+    with engine.begin() as conn:
+        if dialect == "mysql":
+            # NOT NULL 必须有默认值，否则存量行因无法填充而报错
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NOT NULL DEFAULT ''")
+            )
+        else:
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) DEFAULT ''"))
+    print("[init_db] 已为 users 表补充 password_hash 字段")
+
+
+def _backfill_demo_passwords(engine) -> None:
+    """开发便利：给无密码的用户设置演示密码 123456，避免存量账号无法登录。"""
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        empties = s.execute(select(User).where(User.password_hash == "")).scalars().all()
+        if not empties:
+            return
+        for u in empties:
+            u.password_hash = hash_password("123456")
+        s.commit()
+        print(f"[init_db] 为 {len(empties)} 个无密码用户设置演示密码（123456）")
 
 
 def main() -> None:
@@ -77,6 +110,14 @@ def main() -> None:
         print("[init_db] 已删除所有表")
 
     Base.metadata.create_all(engine)
+
+    # create_all 不会给已存在的表补列：对存量库（尤其是正在跑的 MySQL）补 password_hash。
+    # 否则登录接口读 users.password_hash 会报「Unknown column」。
+    _ensure_password_column(engine, dialect)
+
+    # 开发便利：为没有密码的用户回填演示密码 123456，避免存量账号无法登录。
+    # 生产环境应改成强制用户走「首次登录设置密码」，这里仅本地演示用。
+    _backfill_demo_passwords(engine)
 
     tables = sorted(Base.metadata.tables.keys())
     print(f"[init_db] 建表完成，共 {len(tables)} 张表：")

@@ -14,7 +14,9 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.core.database import Base  # noqa: E402
+from app.core.security import get_current_user, hash_password  # noqa: E402
 from app.models import ecommerce, workflow  # noqa: F401,E402
+from app.models.ecommerce import User  # noqa: E402
 from app.services.workflow_engine import WorkflowEngine  # noqa: E402
 
 
@@ -39,11 +41,42 @@ def engine(db):
 
 
 @pytest.fixture
-def client(db, order_flow):
-    """把接口的数据库会话替换为测试库，并预置已发布的订单流程。
+def current_user(db):
+    """一个已注册（有密码）的默认登录用户，供接口测试充当「当前用户」。"""
+    u = User(username="tester", nickname="测试员", phone="13800000000",
+             password_hash=hash_password("123456"))
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
 
-    order_flow 是必需的：下单类接口会去查 published 的 order_flow 定义。
+
+@pytest.fixture
+def client(db, order_flow, current_user):
+    """已「登录」的客户端：get_db 与 get_current_user 都被覆盖。
+
+    - 接口看到的就是 current_user，无需在请求里塞 user_id；
+    - client.user 是当前用户对象，client.as_user(other) 可临时切换身份，
+      用来测试越权/隔离场景。
     """
+    from fastapi.testclient import TestClient
+
+    from app.core.database import get_db
+    from app.main import app
+
+    state = {"user": current_user}
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: state["user"]
+    with TestClient(app) as c:
+        c.user = current_user
+        c.as_user = lambda u: state.__setitem__("user", u)
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def raw_client(db, order_flow):
+    """未覆盖鉴权的真实客户端：用来验证 401 / 带令牌 200 的真实鉴权链路。"""
     from fastapi.testclient import TestClient
 
     from app.core.database import get_db

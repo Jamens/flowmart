@@ -10,7 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.ecommerce import Category, Product
+from app.core.security import get_current_user
+from app.models.ecommerce import Category, Product, User
 
 router = APIRouter(prefix="/categories", tags=["分类"])
 
@@ -112,7 +113,10 @@ def category_tree(db: Session = Depends(get_db)):
 
 
 @router.post("", status_code=201, summary="创建分类")
-def create_category(payload: CategoryIn, db: Session = Depends(get_db)):
+def create_category(
+    payload: CategoryIn,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
     if payload.parent_id:
         _get_category(db, payload.parent_id)  # 父分类必须存在
     c = Category(name=payload.name, parent_id=payload.parent_id, sort=payload.sort)
@@ -124,7 +128,8 @@ def create_category(payload: CategoryIn, db: Session = Depends(get_db)):
 
 @router.patch("/{category_id}", summary="修改分类")
 def update_category(
-    category_id: int, payload: CategoryUpdateIn, db: Session = Depends(get_db)
+    category_id: int, payload: CategoryUpdateIn,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     c = _get_category(db, category_id)
     if payload.parent_id is not None and payload.parent_id:

@@ -32,16 +32,18 @@ def test_health(client):
 
 
 def test_create_order_starts_workflow(client, sku):
-    """下单后应自动启动流程并停在待付款。"""
+    """下单后应自动启动流程并停在待付款。订单归属当前登录用户。"""
     r = client.post(
         "/api/v1/orders",
-        json={"user_id": 1, "items": [{"sku_id": sku.id, "quantity": 2}]},
+        json={"items": [{"sku_id": sku.id, "quantity": 2}]},
     )
     assert r.status_code == 201, r.text
     data = r.json()
     assert data["status"] == "pending_payment"
     assert data["pay_amount"] == 200  # 100 × 2
     assert "pay" in [e["event"] for e in data["available_events"]]
+    # 订单归属当前用户（不再从请求体读 user_id）
+    assert data["user_id"] == client.user.id
     # 库存应同步扣减
     assert client.get(f"/api/v1/products/{sku.product_id}").json()["skus"][0]["stock"] == 8
 
@@ -49,7 +51,7 @@ def test_create_order_starts_workflow(client, sku):
 def test_pay_advances_to_paid(client, sku):
     r = client.post(
         "/api/v1/orders",
-        json={"user_id": 1, "items": [{"sku_id": sku.id, "quantity": 1}]},
+        json={"items": [{"sku_id": sku.id, "quantity": 1}]},
     )
     order = r.json()
     r2 = client.post(f"/api/v1/orders/{order['id']}/actions/pay")
@@ -63,7 +65,7 @@ def test_illegal_action_returns_400(client, sku):
     """待付款状态下发货必须被拒绝，而不是静默成功。"""
     order = client.post(
         "/api/v1/orders",
-        json={"user_id": 1, "items": [{"sku_id": sku.id, "quantity": 1}]},
+        json={"items": [{"sku_id": sku.id, "quantity": 1}]},
     ).json()
     r = client.post(f"/api/v1/orders/{order['id']}/actions/ship")
     assert r.status_code == 400
@@ -73,7 +75,7 @@ def test_illegal_action_returns_400(client, sku):
 def test_insufficient_stock_returns_400(client, sku):
     r = client.post(
         "/api/v1/orders",
-        json={"user_id": 1, "items": [{"sku_id": sku.id, "quantity": 999}]},
+        json={"items": [{"sku_id": sku.id, "quantity": 999}]},
     )
     assert r.status_code == 400
     assert "库存不足" in r.json()["detail"]

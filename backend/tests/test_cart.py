@@ -5,10 +5,14 @@
 2. 累加后仍受库存约束，不能靠反复加入绕过
 3. 结算失败时购物车必须保留（事务回滚），不能出现「订单没成、购物车却空了」
 4. 不能越权修改/删除他人的购物车项
+
+身份约定：client 已登录为 client.user，购物车归属令牌用户；
+切换身份用 client.as_user(other)，无需在请求体里塞 user_id。
 """
 import pytest
 
-from app.models.ecommerce import Product, Sku
+from app.core.security import hash_password
+from app.models.ecommerce import Product, Sku, User
 
 
 @pytest.fixture
@@ -22,14 +26,21 @@ def sku(db):
     return s
 
 
-def add(client, sku_id, qty, user_id=1):
-    return client.post(
-        "/api/v1/cart", json={"user_id": user_id, "sku_id": sku_id, "quantity": qty}
-    )
+@pytest.fixture
+def other_user(db):
+    u = User(username="other_guy", password_hash=hash_password("123456"))
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
 
 
-def cart(client, user_id=1):
-    return client.get(f"/api/v1/cart?user_id={user_id}").json()
+def add(client, sku_id, qty):
+    return client.post("/api/v1/cart", json={"sku_id": sku_id, "quantity": qty})
+
+
+def cart(client):
+    return client.get("/api/v1/cart").json()
 
 
 def test_add_and_list(client, sku):
@@ -68,7 +79,7 @@ def test_accumulate_beyond_stock_rejected(client, sku):
 def test_update_quantity(client, sku):
     add(client, sku.id, 4)
     item_id = cart(client)["items"][0]["id"]
-    r = client.patch(f"/api/v1/cart/{item_id}", json={"user_id": 1, "quantity": 1})
+    r = client.patch(f"/api/v1/cart/{item_id}", json={"quantity": 1})
     assert r.status_code == 200
     assert cart(client)["items"][0]["quantity"] == 1
 
@@ -76,41 +87,44 @@ def test_update_quantity(client, sku):
 def test_update_beyond_stock_rejected(client, sku):
     add(client, sku.id, 1)
     item_id = cart(client)["items"][0]["id"]
-    r = client.patch(f"/api/v1/cart/{item_id}", json={"user_id": 1, "quantity": 99})
+    r = client.patch(f"/api/v1/cart/{item_id}", json={"quantity": 99})
     assert r.status_code == 400
 
 
 def test_remove_by_zero_quantity(client, sku):
     add(client, sku.id, 1)
     item_id = cart(client)["items"][0]["id"]
-    client.patch(f"/api/v1/cart/{item_id}", json={"user_id": 1, "quantity": 0})
+    client.patch(f"/api/v1/cart/{item_id}", json={"quantity": 0})
     assert cart(client)["items"] == []
 
 
-def test_cannot_touch_other_users_cart(client, sku):
-    """越权防护：用户 2 不能改也不能删用户 1 的购物车项。"""
-    add(client, sku.id, 1, user_id=1)
-    item_id = cart(client, user_id=1)["items"][0]["id"]
+def test_cannot_touch_other_users_cart(client, sku, other_user):
+    """越权防护：other 不能改也不能删当前用户的购物车项。"""
+    add(client, sku.id, 1)
+    item_id = cart(client)["items"][0]["id"]
 
-    assert client.patch(
-        f"/api/v1/cart/{item_id}", json={"user_id": 2, "quantity": 99}
-    ).status_code == 404
-    assert client.delete(f"/api/v1/cart/{item_id}?user_id=2").status_code == 404
+    client.as_user(other_user)
+    assert client.patch(f"/api/v1/cart/{item_id}", json={"quantity": 99}).status_code == 404
+    assert client.delete(f"/api/v1/cart/{item_id}").status_code == 404
 
     # 原所有者的数据必须完好无损
-    assert cart(client, user_id=1)["items"][0]["quantity"] == 1
+    client.as_user(client.user)
+    assert cart(client)["items"][0]["quantity"] == 1
 
 
-def test_carts_are_isolated_between_users(client, sku):
-    add(client, sku.id, 1, user_id=1)
-    add(client, sku.id, 2, user_id=2)
-    assert cart(client, user_id=1)["items"][0]["quantity"] == 1
-    assert cart(client, user_id=2)["items"][0]["quantity"] == 2
+def test_carts_are_isolated_between_users(client, sku, other_user):
+    add(client, sku.id, 1)
+    client.as_user(other_user)
+    add(client, sku.id, 2)
+    # 各自只看到自己的购物车
+    assert cart(client)["items"][0]["quantity"] == 2
+    client.as_user(client.user)
+    assert cart(client)["items"][0]["quantity"] == 1
 
 
 def test_checkout_creates_order_and_clears_cart(client, sku):
     add(client, sku.id, 2)
-    r = client.post("/api/v1/cart/checkout", json={"user_id": 1})
+    r = client.post("/api/v1/cart/checkout", json={})
     assert r.status_code == 201, r.text
     data = r.json()
     assert data["pay_amount"] == 100
@@ -133,7 +147,7 @@ def test_checkout_partial_items(client, db, sku):
     items = cart(client)["items"]
     target = [i["id"] for i in items if i["sku_id"] == s2.id]
 
-    r = client.post("/api/v1/cart/checkout", json={"user_id": 1, "item_ids": target})
+    r = client.post("/api/v1/cart/checkout", json={"item_ids": target})
     assert r.status_code == 201
     assert r.json()["pay_amount"] == 20  # 只结算了第二个商品
 
@@ -145,7 +159,7 @@ def test_checkout_partial_items(client, db, sku):
 def test_checkout_rejects_unknown_item_ids(client, sku):
     """传入不存在的 id 必须报错，不能静默只结算命中的部分。"""
     add(client, sku.id, 1)
-    r = client.post("/api/v1/cart/checkout", json={"user_id": 1, "item_ids": [9999]})
+    r = client.post("/api/v1/cart/checkout", json={"item_ids": [9999]})
     assert r.status_code == 400
     # 购物车不应被清空
     assert len(cart(client)["items"]) == 1
@@ -158,7 +172,7 @@ def test_checkout_failure_keeps_cart(client, db, sku):
     sku.stock = 1
     db.commit()
 
-    r = client.post("/api/v1/cart/checkout", json={"user_id": 1})
+    r = client.post("/api/v1/cart/checkout", json={})
     assert r.status_code == 400
     # 关键断言：购物车内容必须还在
     items = cart(client)["items"]
@@ -167,6 +181,6 @@ def test_checkout_failure_keeps_cart(client, db, sku):
 
 
 def test_checkout_empty_cart(client):
-    r = client.post("/api/v1/cart/checkout", json={"user_id": 99})
+    r = client.post("/api/v1/cart/checkout", json={})
     assert r.status_code == 400
     assert "购物车为空" in r.json()["detail"]

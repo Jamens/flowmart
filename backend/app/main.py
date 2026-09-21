@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin_db, cart, categories, orders, products, users, workflows
+from app.api import admin_db, auth, cart, categories, orders, products, users, workflows
 from app.core.config import settings
 
 app = FastAPI(
@@ -29,6 +29,7 @@ app.include_router(users.router, prefix=api)
 app.include_router(orders.router, prefix=api)
 app.include_router(workflows.router, prefix=api)
 app.include_router(admin_db.router, prefix=api)
+app.include_router(auth.router, prefix=api)
 
 
 @app.get("/health", tags=["system"], summary="健康检查")

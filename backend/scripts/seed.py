@@ -185,7 +185,10 @@ def seed_users(db) -> tuple[int, int, int]:
     for username, nickname, phone in [("zhangsan", "张三", "13800000001"), ("lisi", "李四", "13800000002")]:
         user = db.execute(select(User).where(User.username == username)).scalars().first()
         if user is None:
-            user = User(username=username, nickname=nickname, phone=phone)
+            user = User(
+                username=username, nickname=nickname, phone=phone,
+                password_hash=hash_password("123456"),
+            )
             db.add(user)
             db.flush()
         users[username] = user.id

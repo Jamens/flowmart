@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = True
 
+    # JWT 签名密钥：生产必须改成强随机值并通过环境变量注入，默认仅开发可用
+    SECRET_KEY: str = "dev-only-insecure-secret-change-me"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 默认 1 天
+
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306

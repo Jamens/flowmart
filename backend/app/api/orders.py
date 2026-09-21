@@ -2,6 +2,10 @@
 
 流转动作统一走 POST /orders/{id}/actions/{event}：
 新增流程事件时不需要改 API 代码，由服务层与流程定义决定支持哪些 event。
+
+鉴权：所有接口都必须登录。下单时订单归属固定为当前登录用户（get_current_user），
+不再信任请求体里的 user_id —— 这是防冒充下单的关键。订单列表/详情对登录用户开放
+（管理后台视角），但「以谁的身份下单」这一写操作只能由令牌决定。
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -9,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
-from app.models.ecommerce import Order
+from app.core.security import get_current_user
+from app.models.ecommerce import Order, User
 from app.services.order_service import OrderService
 from app.services.workflow_engine import WorkflowError
 
@@ -22,7 +27,6 @@ class OrderItemIn(BaseModel):
 
 
 class OrderCreateIn(BaseModel):
-    user_id: int
     items: list[OrderItemIn] = Field(..., min_length=1)
     address_id: int | None = None
     remark: str = ""
@@ -72,20 +76,26 @@ def _serialize(order: Order, svc: OrderService) -> dict:
     }
 
 
-@router.get("", summary="订单列表")
-def list_orders(status: str = "", user_id: int = 0, db: Session = Depends(get_db)):
+@router.get("", summary="订单列表（登录用户可见全部，供管理后台）")
+def list_orders(
+    status: str = "",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     stmt = select(Order).options(selectinload(Order.items))
     if status:
         stmt = stmt.where(Order.status == status)
-    if user_id:
-        stmt = stmt.where(Order.user_id == user_id)
     orders = db.execute(stmt.order_by(Order.id.desc())).scalars().unique().all()
     svc = OrderService(db)
     return [_serialize(o, svc) for o in orders]
 
 
 @router.get("/{order_id}", summary="订单详情")
-def get_order(order_id: int, db: Session = Depends(get_db)):
+def get_order(
+    order_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     order = db.execute(
         select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
     ).scalars().unique().first()
@@ -94,12 +104,16 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
     return _serialize(order, OrderService(db))
 
 
-@router.post("", status_code=201, summary="创建订单（自动启动工作流）")
-def create_order(payload: OrderCreateIn, db: Session = Depends(get_db)):
+@router.post("", status_code=201, summary="创建订单（自动启动工作流，归属当前用户）")
+def create_order(
+    payload: OrderCreateIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     svc = OrderService(db)
     try:
         order = svc.create_order(
-            user_id=payload.user_id,
+            user_id=current_user.id,
             items=[i.model_dump() for i in payload.items],
             address_id=payload.address_id,
             remark=payload.remark,
@@ -112,7 +126,11 @@ def create_order(payload: OrderCreateIn, db: Session = Depends(get_db)):
 
 @router.post("/{order_id}/actions/{event}", summary="推进订单流转")
 def fire_event(
-    order_id: int, event: str, payload: ActionIn = ActionIn(), db: Session = Depends(get_db)
+    order_id: int,
+    event: str,
+    payload: ActionIn = ActionIn(),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     order = db.get(Order, order_id)
     if order is None:

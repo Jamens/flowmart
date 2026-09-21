@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
-from app.models.ecommerce import Category, Product, Sku
+from app.core.security import get_current_user
+from app.models.ecommerce import Category, Product, Sku, User
 
 router = APIRouter(prefix="/products", tags=["商品"])
 
@@ -66,7 +67,10 @@ def list_products(
 
 
 @router.get("/{product_id}", response_model=ProductOut, summary="商品详情")
-def get_product(product_id: int, db: Session = Depends(get_db)):
+def get_product(
+    product_id: int,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
     product = db.execute(
         select(Product).options(selectinload(Product.skus)).where(Product.id == product_id)
     ).scalars().unique().first()
@@ -78,7 +82,10 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=ProductOut, status_code=201, summary="创建商品（含 SKU）")
-def create_product(payload: ProductIn, db: Session = Depends(get_db)):
+def create_product(
+    payload: ProductIn,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
     # sku_code 唯一，重复要提前报错而不是等数据库抛完整性错误
     for sku in payload.skus:
         exist = db.execute(select(Sku).where(Sku.sku_code == sku.sku_code)).scalars().first()

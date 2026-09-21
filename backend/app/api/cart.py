@@ -7,6 +7,8 @@
    全部成功后统一提交，避免出现「订单已生成但购物车还在」。
 3. 所有按 id 操作购物车的接口都必须带上 user_id 一起过滤 —— 只按 item_id 查询
    会让任意用户修改甚至删除他人的购物车项。
+4. **身份来自令牌**：购物车归属于当前登录用户（get_current_user），不再信任请求体里的
+   user_id。之前购物车越权 bug 的根因就是 user_id 由前端随便填，现在主语固定为令牌用户。
 """
 from decimal import Decimal
 
@@ -16,7 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.ecommerce import CartItem, Sku
+from app.core.security import get_current_user
+from app.models.ecommerce import CartItem, Sku, User
 from app.services.order_service import OrderService
 from app.services.workflow_engine import WorkflowError
 
@@ -24,18 +27,15 @@ router = APIRouter(prefix="/cart", tags=["购物车"])
 
 
 class CartAddIn(BaseModel):
-    user_id: int
     sku_id: int
     quantity: int = Field(1, ge=1)
 
 
 class CartUpdateIn(BaseModel):
-    user_id: int
     quantity: int = Field(..., ge=0)  # 0 表示移除该商品
 
 
 class CheckoutIn(BaseModel):
-    user_id: int
     address_id: int | None = None
     item_ids: list[int] | None = None  # 不传表示结算全部
 
@@ -84,19 +84,25 @@ def _serialize(items: list[CartItem], db: Session) -> tuple[list[dict], float]:
     return result, float(total)
 
 
-@router.get("", summary="查看购物车")
-def list_cart(user_id: int, db: Session = Depends(get_db)):
+@router.get("", summary="查看我的购物车")
+def list_cart(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     items = (
-        db.execute(select(CartItem).where(CartItem.user_id == user_id).order_by(CartItem.id))
+        db.execute(
+            select(CartItem).where(CartItem.user_id == current_user.id).order_by(CartItem.id)
+        )
         .scalars()
         .all()
     )
     rows, total = _serialize(items, db)
-    return {"user_id": user_id, "items": rows, "total": total}
+    return {"user_id": current_user.id, "items": rows, "total": total}
 
 
 @router.post("", status_code=201, summary="加入购物车")
-def add_to_cart(payload: CartAddIn, db: Session = Depends(get_db)):
+def add_to_cart(
+    payload: CartAddIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     sku = db.get(Sku, payload.sku_id)
     if sku is None:
         raise HTTPException(status_code=404, detail="SKU 不存在")
@@ -108,7 +114,7 @@ def add_to_cart(payload: CartAddIn, db: Session = Depends(get_db)):
     existing = (
         db.execute(
             select(CartItem).where(
-                CartItem.user_id == payload.user_id, CartItem.sku_id == payload.sku_id
+                CartItem.user_id == current_user.id, CartItem.sku_id == payload.sku_id
             )
         )
         .scalars()
@@ -128,7 +134,7 @@ def add_to_cart(payload: CartAddIn, db: Session = Depends(get_db)):
         item = existing
     else:
         item = CartItem(
-            user_id=payload.user_id, sku_id=payload.sku_id, quantity=payload.quantity
+            user_id=current_user.id, sku_id=payload.sku_id, quantity=payload.quantity
         )
         db.add(item)
     db.commit()
@@ -137,8 +143,13 @@ def add_to_cart(payload: CartAddIn, db: Session = Depends(get_db)):
 
 
 @router.patch("/{item_id}", summary="修改数量（0 表示移除）")
-def update_quantity(item_id: int, payload: CartUpdateIn, db: Session = Depends(get_db)):
-    item = _owned_item(db, item_id, payload.user_id)
+def update_quantity(
+    item_id: int,
+    payload: CartUpdateIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = _owned_item(db, item_id, current_user.id)
 
     if payload.quantity == 0:
         db.delete(item)
@@ -163,17 +174,26 @@ def update_quantity(item_id: int, payload: CartUpdateIn, db: Session = Depends(g
 
 
 @router.delete("/{item_id}", summary="移除商品")
-def remove_item(item_id: int, user_id: int, db: Session = Depends(get_db)):
-    item = _owned_item(db, item_id, user_id)
+def remove_item(
+    item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = _owned_item(db, item_id, current_user.id)
     db.delete(item)
     db.commit()
     return {"id": item_id, "removed": True}
 
 
 @router.post("/checkout", status_code=201, summary="结算购物车")
-def checkout(payload: CheckoutIn, db: Session = Depends(get_db)):
+def checkout(
+    payload: CheckoutIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """购物车结算：生成订单并清空已结算的商品，两者在同一事务内完成。"""
-    stmt = select(CartItem).where(CartItem.user_id == payload.user_id)
+    user_id = current_user.id
+    stmt = select(CartItem).where(CartItem.user_id == user_id)
     if payload.item_ids:
         stmt = stmt.where(CartItem.id.in_(payload.item_ids))
     items = db.execute(stmt).scalars().all()
@@ -194,7 +214,7 @@ def checkout(payload: CheckoutIn, db: Session = Depends(get_db)):
     try:
         # auto_commit=False：先不提交，等购物车清空后一起提交
         order = svc.create_order(
-            user_id=payload.user_id,
+            user_id=user_id,
             items=[{"sku_id": i.sku_id, "quantity": i.quantity} for i in items],
             address_id=payload.address_id,
             auto_commit=False,

@@ -63,20 +63,37 @@ DB_PASSWORD=1234560
 - 未注册副作用的新事件（如 approve、reject）默认纯推进，无需改动任何代码
 - 订单表冗余 `status` 字段供列表筛选，由引擎同步写入
 
+### 鉴权（`app/core/security.py` + `app/api/auth.py`）
+
+- **JWT（HS256）**：登录/注册签发令牌，后续请求在 `Authorization: Bearer` 头携带；
+  令牌只含 `sub`（用户 id）、`iat`、`exp`，用 HMAC-SHA256 签名，`hmac.compare_digest` 常量时间校验防时序攻击。
+- **密码哈希**：PBKDF2-HMAC-SHA256（10 万次迭代）+ 随机盐，存储格式 `pbkdf2$sha256$<iter>$<salt>$<dk>`，
+  明文绝不下库；纯标准库实现，无第三方加密依赖。
+- **依赖注入取身份**：`get_current_user` 解析令牌返回用户对象，所有资源接口 `Depends` 它，
+  因此「当前用户」恒来自令牌，前端无法伪造 `user_id` 冒充他人。
+- 登录失败（用户不存在 / 密码错误）统一返回 `401 用户名或密码错误`，不泄露哪些用户名已注册。
+
 ### REST API
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| POST | `/api/v1/auth/register` | 注册（直接返回 token） |
+| POST | `/api/v1/auth/login` | 登录换取 JWT |
+| GET | `/api/v1/auth/me` | 当前登录用户 |
 | GET | `/api/v1/products` | 商品列表（含 SKU） |
 | POST | `/api/v1/products` | 创建商品 |
-| GET | `/api/v1/orders` | 订单列表，支持按 status 筛选 |
-| POST | `/api/v1/orders` | 创建订单（自动启动工作流） |
-| GET | `/api/v1/cart?user_id=` | 购物车列表（含合计） |
+| GET | `/api/v1/orders` | 订单列表（登录可见全部，管理后台视角） |
+| POST | `/api/v1/orders` | 创建订单（自动启动工作流，**归属当前用户**） |
+| GET | `/api/v1/cart` | 我的购物车列表（含合计） |
 | POST | `/api/v1/cart` | 加入购物车（同 SKU 自动累加） |
 | PATCH | `/api/v1/cart/{id}` | 修改数量（传 0 表示移除） |
 | DELETE | `/api/v1/cart/{id}` | 移除商品 |
 | POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空） |
 | GET | `/api/v1/users` | 用户列表（active_only 过滤） |
+
+> **鉴权**：除 `/health` 与 `/auth/login`、`/auth/register` 外，所有接口都必须在请求头带
+> `Authorization: Bearer <token>`。订单归属、购物车、地址都取自令牌中的用户身份，
+> **不再信任请求体/路径里的 `user_id`**，从根上消除冒充他人下单、看他人地址的越权。
 | POST | `/api/v1/users` | 创建用户 |
 | GET | `/api/v1/users/{id}` | 用户详情（含地址） |
 | PATCH | `/api/v1/users/{id}` | 更新用户 |
@@ -202,9 +219,10 @@ docs/            表结构与数据可视化页面（由脚本生成）
 
 ## 待办
 
-- [ ] 用户认证与鉴权（当前订单归属固定在 `user_id=1`，仅为演示）
+- [x] 用户认证与鉴权（JWT + 依赖注入，身份取自令牌而非前端 `user_id`）
+- [ ] 角色/权限（目前为「登录即可」，管理员与普通用户尚未区分；订单列表对登录用户全开放）
 - [ ] 购物车前端页面（后端 API 已完整并测试通过）
 - [ ] 商品 / 分类 / 用户的管理页面（目前前端只有订单页与设计器）
-- [ ] Alembic 迁移脚本（当前用 `create_all`，模型变更后需删表重建）
+- [ ] Alembic 迁移脚本（当前 `init_db.py` 用 `create_all` + 存量列补丁，模型变更后仍需 `--drop`）
 - [ ] 库存并发控制（高并发下需要行锁或乐观锁）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本）

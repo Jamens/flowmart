@@ -42,6 +42,8 @@ class User(TimestampMixin, Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     nickname: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     phone: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    # 密码哈希，格式见 app/core/security.hash_password；留空表示尚未设置密码
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
