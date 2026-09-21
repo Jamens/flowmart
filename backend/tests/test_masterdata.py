@@ -158,3 +158,24 @@ def test_category_list_shows_product_count(client, db):
 
     row = next(x for x in client.get("/api/v1/categories").json() if x["id"] == c.id)
     assert row["product_count"] == 1
+
+
+def test_indirect_cycle_rejected(client):
+    """A→B 之后再把 B→A 会成环，必须拒绝。
+
+    否则两个分类互相成为对方的 children，谁都不会出现在根节点，
+    在分类树里凭空消失 —— 比直接报错难排查得多。
+    """
+    a = client.post("/api/v1/categories", json={"name": "环A"}).json()
+    b = client.post("/api/v1/categories", json={"name": "环B"}).json()
+
+    assert client.patch(
+        f"/api/v1/categories/{a['id']}", json={"parent_id": b["id"]}
+    ).status_code == 200
+
+    r = client.patch(f"/api/v1/categories/{b['id']}", json={"parent_id": a["id"]})
+    assert r.status_code == 400
+
+    # B 必须仍在树里可见
+    root_ids = [t["id"] for t in client.get("/api/v1/categories/tree").json()]
+    assert b["id"] in root_ids

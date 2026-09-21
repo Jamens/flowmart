@@ -34,6 +34,27 @@ def _get_category(db: Session, category_id: int) -> Category:
     return c
 
 
+def _assert_no_cycle(db: Session, category_id: int, parent_id: int) -> None:
+    """沿 parent 链向上追溯，若绕回自身说明会成环。
+
+    只校验「父级不能是自己」是不够的：A→B、B→A 这种间接环同样会发生，
+    后果是两个节点互相成为对方的 children，谁都不会出现在根节点里，
+    分类在树中凭空消失 —— 比报错更难排查。
+    """
+    seen: set[int] = set()
+    cursor = parent_id
+    while cursor:
+        if cursor == category_id:
+            raise HTTPException(status_code=400, detail="父分类不能是自己或其子孙")
+        if cursor in seen:
+            raise HTTPException(status_code=400, detail="检测到分类层级成环")
+        seen.add(cursor)
+        parent = db.get(Category, cursor)
+        if parent is None:
+            break
+        cursor = parent.parent_id
+
+
 def _count_products(db: Session, category_id: int) -> int:
     return (
         db.execute(
@@ -63,7 +84,10 @@ def list_categories(parent_id: int | None = None, db: Session = Depends(get_db))
 
 @router.get("/tree", summary="分类树")
 def category_tree(db: Session = Depends(get_db)):
-    """返回两级结构：顶层分类 + 其子分类。"""
+    """按 parent_id 递归组装成嵌套树，支持任意层级。
+
+    只有 parent_id 为 0 或父级不存在的节点会作为根节点。
+    """
     rows = db.execute(select(Category).order_by(Category.sort, Category.id)).scalars().all()
     nodes = [
         {
@@ -104,10 +128,8 @@ def update_category(
 ):
     c = _get_category(db, category_id)
     if payload.parent_id is not None and payload.parent_id:
-        # 不能把自己设成自己的父级，否则树会成环
-        if payload.parent_id == category_id:
-            raise HTTPException(status_code=400, detail="分类的父级不能是自己")
         _get_category(db, payload.parent_id)
+        _assert_no_cycle(db, category_id, payload.parent_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(c, field, value)
     db.commit()
