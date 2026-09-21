@@ -49,6 +49,40 @@ DB_DIALECT=mysql
 DB_PASSWORD=1234560
 ```
 
+## 数据库迁移（Alembic）
+
+模型改了之后**不要再靠 `--drop` 重建**（会丢数据），改用迁移：
+
+```bash
+cd backend
+
+# 1. 改完模型后生成迁移脚本
+python -m alembic revision --autogenerate -m "简述改了什么"
+
+# 2. 检查将要执行的 SQL（可选，推荐先看一眼）
+python -m alembic upgrade head --sql
+
+# 3. 应用到数据库
+python -m alembic upgrade head
+
+# 回滚一个版本
+python -m alembic downgrade -1
+```
+
+要点：
+
+- **连接串不在 `alembic.ini` 里**，由 `migrations/env.py` 从 `app.core.config.settings`
+  读取，`DB_DIALECT` / `.env` 仍是唯一事实来源。临时迁移别的库可用
+  `python -m alembic -x url="sqlite:///D:/tmp/x.db" upgrade head`。
+- **SQLite 必须开 batch 模式**（env.py 已开）：SQLite 不支持多数 `ALTER`，
+  不开的话改列会直接报错。
+- **`alembic.ini` 必须保持 ASCII**：中文 Windows 下 alembic 用 GBK locale 读它，
+  写中文注释会直接 `UnicodeDecodeError`。
+- **`init_db.py` 与 alembic 可共存**：`init_db` 走 `create_all` 后会自动打上
+  当前版本标记（baseline stamp），否则之后 `alembic upgrade` 会把库当空库、
+  重新建表并报「table already exists」。
+- MySQL 首次使用需先跑 `init_db.py`（它会建库），再由 alembic 管表结构。
+
 ## 已完成功能
 
 ### 工作流引擎（`app/services/workflow_engine.py`）
@@ -260,7 +294,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 商品管理页面（`ProductsView.vue`：搜索 / 状态筛选含下架、SKU 展开明细、上架下架、新建商品含动态 SKU 行）
 - [ ] 分类管理页面
 - [ ] 用户管理页面（含收货地址管理）
-- [ ] Alembic 迁移脚本（当前 `init_db.py` 用 `create_all` + 存量列补丁，模型变更后仍需 `--drop`）
+- [x] Alembic 迁移脚本（初始迁移已生成并与模型一致；`alembic upgrade head` / `downgrade base`；`tests/test_migrations.py` 守住「改模型忘写迁移」）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本，无版本历史 / 回滚）
 - [ ] JWT 刷新 / 续期机制（当前令牌过期即需重新登录）
 - [ ] 列表接口分页（orders / products / users 目前全量返回，数据量大时需分页）

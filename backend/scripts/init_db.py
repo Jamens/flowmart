@@ -92,7 +92,38 @@ def _backfill_admin(engine) -> None:
             admin.is_admin = True
             s.commit()
             print(f"[init_db] 已将 {settings.BOOTSTRAP_ADMIN} 设为管理员")
-        ensure_admin_exists(s)  # 收尾校验：零管理员则启动报错，避免静默锁死
+
+        # 「零管理员」校验只在已经有用户时才成立：
+        # 全新库上用户要等 seed 才创建，此时必然是 0 个用户，若照常校验会让
+        # init_db 在全新安装时永远失败（而它本该只是建表）。
+        # 真正的锁死风险是「有用户但没人管」，那是存量库才有的情况。
+        has_any_user = s.execute(select(User.id).limit(1)).first() is not None
+        if has_any_user:
+            ensure_admin_exists(s)
+
+
+def _ensure_alembic_baseline(engine, url: str) -> None:
+    """给 create_all 建出来的库打上「已迁移」标记。
+
+    为什么必须做：create_all 不会写 alembic_version 记录，之后执行
+    `alembic upgrade head` 会把这个库当成空库、重新去建表，直接报
+    「table already exists」。打上当前版本的 baseline 后，两条路径就能共存：
+    既保留 init_db 一键建库的开发便利，又不影响后续用 alembic 增量改结构。
+    """
+    insp = inspect(engine)
+    if "alembic_version" in insp.get_table_names():
+        return  # 已由 alembic 接管，不要覆盖它的版本记录
+    try:
+        from alembic import command
+        from alembic.config import Config
+    except ImportError:
+        print("[init_db] 未安装 alembic，跳过版本标记（后续 alembic 可能报表已存在）")
+        return
+
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.stamp(cfg, "head")
+    print("[init_db] 已标记当前数据库为最新迁移版本（alembic baseline）")
 
 
 def main() -> None:
@@ -134,6 +165,10 @@ def main() -> None:
 
     if args.drop:
         Base.metadata.drop_all(engine)
+        # alembic_version 不在 Base.metadata 里，drop_all 不会删它，
+        # 残留的旧版本号会让后续 stamp/upgrade 判断错乱，必须一起清掉
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
         print("[init_db] 已删除所有表")
 
     Base.metadata.create_all(engine)
@@ -155,6 +190,9 @@ def main() -> None:
     except RuntimeError as e:
         print(f"[init_db] 启动校验失败：{e}", file=sys.stderr)
         sys.exit(1)
+
+    # 让 create_all 建出的库与 alembic 共存（否则后续 alembic upgrade 会报表已存在）
+    _ensure_alembic_baseline(engine, url)
 
     tables = sorted(Base.metadata.tables.keys())
     print(f"[init_db] 建表完成，共 {len(tables)} 张表：")
