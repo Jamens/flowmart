@@ -22,6 +22,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from app.core.config import settings
 
@@ -118,7 +119,7 @@ class RedisStore(RateLimitStore):
 
     PREFIX = "flowmart:rl:"
 
-    def __init__(self, url: str | None = None, client=None) -> None:
+    def __init__(self, url: str | None = None, client: Any = None) -> None:
         if client is not None:
             self._r = client  # 测试注入（fakeredis 等），不连真服务
         else:
@@ -139,11 +140,11 @@ class RedisStore(RateLimitStore):
 
     def register_failure(self, key: str, window: int) -> int:
         k = self._k(key)
-        n = self._r.incr(k)
-        # INCR 原子，只有返回 1 的那次设置过期；后续失败不刷新 TTL（固定窗口语义）
-        if n == 1:
-            self._r.expire(k, window)
-        return n
+        # SET NX EX 先确保键存在且带窗口过期（仅首次设置成功，已存在则不变 → 不刷新 TTL），
+        # 再 INCR 累加。这样没有「INCR 成功但 expire 前进程崩溃留下无 TTL 键→永久封禁」的窗口，
+        # 且 TTL 锚定在首失败时刻，符合固定窗口语义。INCR 原子，并发安全。
+        self._r.set(k, 0, nx=True, ex=window)
+        return self._r.incr(k)
 
     def count(self, key: str, window: int) -> int:
         v = self._r.get(self._k(key))

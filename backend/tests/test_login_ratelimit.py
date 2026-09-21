@@ -14,7 +14,7 @@ import time
 import pytest
 
 from app.core.config import settings
-from app.core.ratelimit import LoginRateLimiter, RedisStore, login_limiter
+from app.core.ratelimit import LoginRateLimiter, MemoryStore, RedisStore, login_limiter
 
 
 @pytest.fixture(autouse=True)
@@ -195,4 +195,6 @@ def test_limiter_redis_backend_end_to_end(raw_client, monkeypatch):
         )
     finally:
         rl_mod.login_limiter.reset_all()
-        rl_mod.login_limiter = LoginRateLimiter()  # 还原为内存单例，避免影响其它测试
+        # 直接还原为内存后端（而非重建单例）：此时 URL monkeypatch 仍生效，
+        # 重建会得到仍是 RedisStore(fake)，导致单例在后续测试里仍走 Redis 后端。
+        rl_mod.login_limiter._store = MemoryStore()
