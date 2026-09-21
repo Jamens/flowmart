@@ -49,8 +49,22 @@ export const api = {
       body: JSON.stringify(payload || {}),
     }),
 
+  // 购物车（归属由后端从令牌取，前端不传 user_id）
+  getCart: () => request('/cart'),
+  addToCart: (payload) =>
+    request('/cart', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCartItem: (id, payload) =>
+    request(`/cart/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  removeCartItem: (id) => request(`/cart/${id}`, { method: 'DELETE' }),
+  // address_id 为 undefined 时 JSON.stringify 会自动省略该字段，即「不指定地址」
+  checkout: (payload) =>
+    request('/cart/checkout', { method: 'POST', body: JSON.stringify(payload || {}) }),
+
   // 商品
   listProducts: () => request('/products'),
+
+  // 收货地址（必须走 /users/{id}/addresses：用户详情不返回地址，避免 PII 泄露）
+  listAddresses: (userId) => request(`/users/${userId}/addresses`),
 
   // 流程定义
   listDefinitions: () => request('/workflows/definitions'),

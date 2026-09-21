@@ -1,0 +1,253 @@
+<template>
+  <div>
+    <!-- 加购区：选 SKU → 数量 → 加入 -->
+    <div class="toolbar">
+      <el-select
+        v-model="skuId"
+        placeholder="选择要加入的商品 SKU"
+        filterable
+        clearable
+        style="width: 340px"
+      >
+        <el-option
+          v-for="s in skuOptions"
+          :key="s.id"
+          :label="`${s.productName} / ${s.spec} (¥${s.price}) 库存${s.stock}`"
+          :value="s.id"
+        />
+      </el-select>
+      <el-input-number v-model="addQty" :min="1" :max="selectedStock || 999" />
+      <el-button type="primary" @click="addItem">加入购物车</el-button>
+      <el-button @click="load">刷新</el-button>
+    </div>
+
+    <el-table :data="items" stripe v-loading="loading">
+      <el-table-column prop="product_name" label="商品" />
+      <el-table-column prop="spec" label="规格" width="120" />
+      <el-table-column label="单价" width="110" align="right">
+        <template #default="{ row }">¥{{ row.price.toFixed(2) }}</template>
+      </el-table-column>
+      <el-table-column label="数量" width="170">
+        <template #default="{ row }">
+          <!-- 不用 v-model：先改本地值再调接口，失败时 UI 与后端会不一致。
+               这里受控渲染，成功才回写，失败则整体 reload 回滚。 -->
+          <el-input-number
+            :model-value="row.quantity"
+            :min="1"
+            :max="row.stock || 999"
+            size="small"
+            @change="(v) => changeQty(row, v)"
+          />
+        </template>
+      </el-table-column>
+      <el-table-column label="小计" width="110" align="right">
+        <template #default="{ row }">¥{{ row.subtotal.toFixed(2) }}</template>
+      </el-table-column>
+      <el-table-column label="剩余库存" width="100">
+        <template #default="{ row }">
+          <!-- 加购后商品被别人买走导致库存下降时，这里要显式告警 -->
+          <el-tag v-if="row.quantity > row.stock" type="danger">{{ row.stock }}</el-tag>
+          <span v-else>{{ row.stock }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="90">
+        <template #default="{ row }">
+          <el-button size="small" type="danger" text @click="removeItem(row)">移除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <div v-if="!loading && !items.length" class="empty">购物车为空，先选一个商品加入吧</div>
+
+    <div class="footer">
+      <span class="total">合计：<b>¥{{ total.toFixed(2) }}</b></span>
+      <el-select
+        v-model="addressId"
+        placeholder="收货地址（可选）"
+        clearable
+        style="width: 300px"
+      >
+        <el-option
+          v-for="a in addresses"
+          :key="a.id"
+          :label="`${a.receiver} ${a.phone} ${a.province}${a.city}${a.district}${a.detail}`"
+          :value="a.id"
+        />
+      </el-select>
+      <el-button type="primary" :disabled="!items.length" @click="doCheckout">结算</el-button>
+    </div>
+
+    <p class="tip">
+      结算与「清空购物车」由后端在同一事务内完成：下单失败时购物车保留，不会出现「订单没生成、购物车却被清空」。
+    </p>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { api } from '../api'
+
+const items = ref([])
+const loading = ref(false)
+const skuOptions = ref([])
+const skuId = ref(null)
+const addQty = ref(1)
+const addresses = ref([])
+const addressId = ref(null)
+
+// 合计本地计算：改数量后立刻同步，避免依赖后端返回的 total（改数量后已过期）
+const total = computed(() =>
+  items.value.reduce((sum, i) => sum + i.price * i.quantity, 0)
+)
+const selectedStock = computed(
+  () => skuOptions.value.find((s) => s.id === skuId.value)?.stock || 0
+)
+
+async function load() {
+  loading.value = true
+  try {
+    const cart = await api.getCart()
+    items.value = cart.items || []
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadSkuOptions() {
+  if (skuOptions.value.length) return
+  try {
+    const products = await api.listProducts()
+    skuOptions.value = products.flatMap((p) =>
+      p.skus.map((s) => ({
+        id: s.id,
+        spec: s.spec,
+        price: s.price,
+        stock: s.stock,
+        productName: p.name,
+      }))
+    )
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function loadAddresses() {
+  try {
+    // 地址必须经 /users/{id}/addresses 取（归属校验），用户详情接口不返回地址
+    const me = await api.me()
+    addresses.value = await api.listAddresses(me.id)
+    const def = addresses.value.find((a) => a.is_default)
+    if (def) addressId.value = def.id
+  } catch {
+    // 地址拉不到不影响加购与结算（address_id 可选），静默降级
+    addresses.value = []
+  }
+}
+
+async function addItem() {
+  if (!skuId.value) return ElMessage.warning('请先选择商品 SKU')
+  try {
+    await api.addToCart({ sku_id: skuId.value, quantity: addQty.value })
+    ElMessage.success('已加入购物车')
+    addQty.value = 1
+    await load()
+    await loadSkuOptions() // 库存可能变化，刷新可选数量上限
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function changeQty(row, value) {
+  if (value === row.quantity) return
+  try {
+    // 传 0 等价于删除该行；这里最小值为 1，故只可能是改数量
+    await api.updateCartItem(row.id, { quantity: value })
+    row.quantity = value
+    row.subtotal = +(row.price * value).toFixed(2)
+  } catch (e) {
+    ElMessage.error(e.message)
+    await load() // 回滚到后端真实值
+  }
+}
+
+async function removeItem(row) {
+  try {
+    await api.removeCartItem(row.id)
+    ElMessage.success('已移除')
+    await load()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function doCheckout() {
+  if (!items.value.length) return
+  const oversell = items.value.filter((i) => i.quantity > i.stock)
+  if (oversell.length) {
+    return ElMessage.error(
+      `「${oversell.map((i) => i.product_name).join('、')}」数量超过库存，请先调整`
+    )
+  }
+  try {
+    await ElMessageBox.confirm(
+      `本次结算 ${items.value.length} 个商品，合计 ¥${total.value.toFixed(2)}。结算后购物车将清空。`,
+      '确认结算',
+      { type: 'warning' }
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const r = await api.checkout({ address_id: addressId.value ?? undefined })
+    ElMessage.success(`结算成功，订单 ${r.order_no} 已生成`)
+    await load()
+  } catch (e) {
+    ElMessage.error(e.message)
+    // 结算失败购物车必须还在：刷新一次让用户看到真实状态
+    await load()
+  }
+}
+
+onMounted(async () => {
+  await load()
+  await loadSkuOptions()
+  await loadAddresses()
+})
+</script>
+
+<style scoped>
+.toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.total {
+  font-size: 15px;
+}
+.total b {
+  color: #f56c6c;
+  font-size: 18px;
+}
+.empty {
+  color: #8b949e;
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
+}
+.tip {
+  color: #8b949e;
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+</style>
