@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     REFRESH_TOKEN_COOKIE_NAME: str = "fm_refresh"
 
+    # 登录限流（防暴力破解）：同一 (客户端IP, 用户名) 在窗口内失败超阈值即拒。
+    # 内存级固定窗口——单实例足够、零依赖；多实例/生产需换 Redis 等共享存储，
+    # 否则限流只对本机请求生效（注释见 backend/app/core/ratelimit.py）。
+    LOGIN_RATE_LIMIT_MAX: int = 5
+    LOGIN_RATE_LIMIT_WINDOW: int = 60  # 秒
+
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306

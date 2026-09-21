@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.ratelimit import login_limiter
 from app.core.security import (
     JWTError,
     clear_auth_cookie,
@@ -68,13 +69,26 @@ def register(payload: RegisterIn, response: Response, db: Session = Depends(get_
 
 
 @router.post("/login", summary="登录换取令牌")
-def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
+def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    # 先查限流：同一 (IP, 用户名) 窗口内失败过多直接拒，阻断密码爆破
+    if login_limiter.is_blocked(request, payload.username):
+        retry = login_limiter.retry_after(request, payload.username)
+        raise HTTPException(
+            status_code=429,
+            detail=f"登录失败次数过多，请 {retry} 秒后再试",
+            headers={"Retry-After": str(retry)},
+        )
     user = db.scalar(select(User).where(User.username == payload.username))
     # 用户名不存在与密码错误返回同样的提示，避免被用来探测哪些用户名已注册
     if user is None or not verify_password(payload.password, user.password_hash):
+        login_limiter.register_failure(request, payload.username)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not user.is_active:
+        # 禁用账号不计失败次数：它本就不是「猜密码」，反复计数只会白白占窗口，
+        # 但仍拒绝登录。注意这里不 reset——禁用状态与爆破无关。
         raise HTTPException(status_code=401, detail="该用户已被禁用")
+    # 登录成功清空失败计数，避免正常用户刚改完密码就被旧失败数误伤
+    login_limiter.reset(request, payload.username)
     token = create_access_token(user.id)
     refresh = create_refresh_token(user.id)
     set_auth_cookie(response, token)

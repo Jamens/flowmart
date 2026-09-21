@@ -121,6 +121,7 @@ python -m alembic downgrade -1
   - 普通买家只能改**自己**的资料、只看**自己**的订单；越权访问他人资源统一 `404`，不泄露目标是否存在；
   - 购物车、订单创建、地址归属始终严格取自令牌用户；`GET /users/{id}` 不返回收货地址，地址须经归属校验的 `/users/{id}/addresses` 获取。
   - **初始管理员可配置**：`config.BOOTSTRAP_ADMIN`（默认 `zhangsan`，可经环境变量覆盖）指定首次 `seed` / `init_db` 时提升为管理员的账号；`BOOTSTRAP_ADMIN` 为空会在启动时直接报错，避免「谁都不是管理员」导致系统静默锁死。生产务必改成真实管理员账号。
+  - **登录限流（防暴力破解）**：`POST /auth/login` 按 `(客户端IP, 用户名)` 固定窗口计数失败次数，窗口内（`LOGIN_RATE_LIMIT_WINDOW`，默认 60 秒）失败超 `LOGIN_RATE_LIMIT_MAX`（默认 5 次）即返回 `429` 并带 `Retry-After` 头；登录成功清空计数，避免正常用户被旧失败数误伤；禁用账号不计失败次数。当前为单实例内存级实现（`app/core/ratelimit.py`），多实例 / 生产需换 Redis 等共享存储，否则限流只对本机生效。
 
 ### REST API
 
@@ -288,7 +289,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 117 passed）
+- [x] 测试（pytest 全量 121 passed）
 
 ### ❌ 待实现
 
@@ -300,6 +301,6 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [ ] 流程定义版本管理（当前同 code 只允许一个 published 版本，无版本历史 / 回滚）
 - [x] JWT 刷新 / 续期机制（短期访问令牌 30 分钟 + 长期刷新令牌 7 天写独立 httpOnly Cookie；POST /auth/refresh 静默换发访问令牌；前端 401 自动刷新并重试一次；access/refresh 令牌 type 隔离防混用）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
-- [ ] 登录限流（无防暴力破解的速率限制）
+- [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
 - [ ] （可选）邮箱 / 手机验证
