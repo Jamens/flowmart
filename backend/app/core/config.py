@@ -51,9 +51,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_bootstrap_admin(self):
-        # 空值意味着「谁都不提升为管理员」，系统会静默锁死、再无 API 能授出管理员。
+        # 去掉首尾空白后再判断：裸 " zhangsan " 这类带空格的值若不归一化，
+        # 会和真实用户名匹配不上，导致「谁都不是管理员」、系统静默锁死。
         # 配置错误必须在启动时暴露，而不是运行时悄悄变成不可用。
-        if not self.BOOTSTRAP_ADMIN or not self.BOOTSTRAP_ADMIN.strip():
+        self.BOOTSTRAP_ADMIN = self.BOOTSTRAP_ADMIN.strip()
+        if not self.BOOTSTRAP_ADMIN:
             raise ValueError("BOOTSTRAP_ADMIN 不能为空：必须指定一个初始管理员用户名")
         return self
 

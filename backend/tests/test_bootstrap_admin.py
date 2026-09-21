@@ -35,6 +35,14 @@ def test_bootstrap_admin_follows_config(db):
 
 def test_empty_bootstrap_admin_rejected(monkeypatch):
     """BOOTSTRAP_ADMIN 为空 = 谁都不提升为管理员，系统会静默锁死；必须在启动时即报错。"""
+    monkeypatch.setenv("DEBUG", "True")
     monkeypatch.setenv("BOOTSTRAP_ADMIN", "")
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="BOOTSTRAP_ADMIN"):
         Settings()
+
+
+def test_padded_bootstrap_admin_is_normalized(monkeypatch):
+    """带首尾空格的用户名（如 " zhangsan "）应在启动时归一化为 "zhangsan"，避免匹配不上导致静默锁死。"""
+    monkeypatch.setenv("DEBUG", "True")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN", " zhangsan ")
+    assert Settings().BOOTSTRAP_ADMIN == "zhangsan"
