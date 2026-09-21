@@ -102,6 +102,23 @@ def _backfill_admin(engine) -> None:
             ensure_admin_exists(s)
 
 
+def _schema_matches_models(engine) -> bool:
+    """库结构是否与模型一致（**不依赖 alembic 版本历史**）。
+
+    这里不能用 `alembic check`：它的语义是「当前版本之后还有没有待应用的迁移」，
+    而一个还没打过版本标记的库会被当作 base，于是必然报告有差异 ——
+    用它当「结构是否一致」的判据会永远误判（已实测踩过）。
+    """
+    try:
+        from alembic.autogenerate import compare_metadata
+        from alembic.migration import MigrationContext
+    except ImportError:
+        return True  # 无法比对时不阻拦，保持原有行为
+    with engine.connect() as conn:
+        diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+    return not diff
+
+
 def _ensure_alembic_baseline(engine, url: str) -> None:
     """给 create_all 建出来的库打上「已迁移」标记。
 
@@ -112,7 +129,13 @@ def _ensure_alembic_baseline(engine, url: str) -> None:
     """
     insp = inspect(engine)
     if "alembic_version" in insp.get_table_names():
-        return  # 已由 alembic 接管，不要覆盖它的版本记录
+        # 关键：downgrade base 之后这张表还在、只是没有行了。
+        # 只看「表是否存在」会误判成已被 alembic 接管而跳过标记，
+        # 于是又掉回上面那个「表已存在」的坑 —— 所以必须看有没有版本记录。
+        with engine.connect() as conn:
+            if conn.execute(text("SELECT 1 FROM alembic_version LIMIT 1")).first():
+                return  # 已有版本记录，交给 alembic 自己管，不要覆盖
+
     try:
         from alembic import command
         from alembic.config import Config
@@ -121,8 +144,27 @@ def _ensure_alembic_baseline(engine, url: str) -> None:
         return
 
     cfg = Config(str(BACKEND_DIR / "alembic.ini"))
-    cfg.set_main_option("sqlalchemy.url", url)
-    command.stamp(cfg, "head")
+    # % 必须转义成 %%：configparser 会做插值，而 MySQL 密码特殊字符已被 percent-encode
+    cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+
+    # 只有结构与模型完全一致时打 baseline 才是安全的：
+    # 否则会把「缺的列」也标记为已迁移，之后真正的迁移会被静默跳过。
+    if not _schema_matches_models(engine):
+        print(
+            "[init_db] 警告：库结构与模型不一致，未打迁移标记；"
+            "请先执行 `alembic upgrade head`（并确认模型改动已生成迁移）",
+            file=sys.stderr,
+        )
+        return
+
+    try:
+        command.stamp(cfg, "head")
+    except Exception as e:
+        print(
+            f"[init_db] 警告：打迁移标记失败（{e}）；表结构已就绪，但 alembic 未记录版本",
+            file=sys.stderr,
+        )
+        return
     print("[init_db] 已标记当前数据库为最新迁移版本（alembic baseline）")
 
 

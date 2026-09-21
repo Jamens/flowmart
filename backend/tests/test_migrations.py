@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, inspect
 
+# 没装 alembic 就跳过，而不是让整批测试失败
+pytest.importorskip("alembic", reason="未安装 alembic，跳过迁移测试")
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 from app.core.database import Base  # noqa: E402
@@ -57,11 +60,14 @@ def test_migrated_schema_matches_models(mig_url):
     assert _run_alembic(mig_url, "upgrade", "head").returncode == 0
 
     r = _run_alembic(mig_url, "check")
-    # alembic check 在「无待迁移变更」时返回 0，有差异时返回非 0
+    # alembic check 在「无待迁移变更」时返回 0，有差异时返回非 0。
+    # 只断言退出码 + 「没有检测到变更」这句不出现：
+    # check 的输出走 logger（stderr），硬断言 stdout 里的字面量会误判。
+    output = r.stdout + r.stderr
     assert r.returncode == 0, (
-        f"模型与迁移不一致（可能改了模型却没生成迁移）：\n{r.stdout}\n{r.stderr}"
+        f"模型与迁移不一致（可能改了模型却没生成迁移）：\n{output}"
     )
-    assert "No new upgrade operations detected" in r.stdout
+    assert "New upgrade operations detected" not in output
 
 
 def test_downgrade_drops_tables(mig_url):

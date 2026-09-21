@@ -15,7 +15,8 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
+from sqlalchemy.engine.url import make_url
 
 # 无论从哪个目录执行 alembic，都要能 import 到 backend/ 下的 app 包
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -29,7 +30,8 @@ from app.models import ecommerce, workflow  # noqa: F401,E402  导入即注册�
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False：否则会把应用已建好的 logger 静默关掉
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # autogenerate 依赖它来对比「模型 vs 库」
 target_metadata = Base.metadata
@@ -43,17 +45,20 @@ def _resolve_url() -> str:
 
 
 URL = _resolve_url()
-# 回填给 config，让下面的 engine_from_config 能读到
-config.set_main_option("sqlalchemy.url", URL)
+# 回填给 config 供其它工具读取。必须把 % 转义成 %%：configparser 会做插值，
+# 而 MySQL 密码里的特殊字符会被 percent-encode（如 @ -> %40），
+# 不转义会在读取时抛 InterpolationSyntaxError。
+config.set_main_option("sqlalchemy.url", URL.replace("%", "%%"))
 
 IS_SQLITE = URL.startswith("sqlite")
 
 if IS_SQLITE:
     # SQLite 文件路径的父目录不存在时，连接会报 "unable to open database file"，
-    # 这里提前建好，避免把配置问题伪装成迁移失败
-    path_part = URL.split("sqlite:///", 1)[-1]
-    if path_part and path_part != ":memory:":
-        Path(path_part).parent.mkdir(parents=True, exist_ok=True)
+    # 这里提前建好，避免把配置问题伪装成迁移失败。
+    # 用 make_url 解析而不是字符串切分，避免 sqlite:////abs 这类四斜杠形式出错。
+    db_path = make_url(URL).database
+    if db_path and db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def run_migrations_offline() -> None:
@@ -72,11 +77,9 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """在线模式：连库执行迁移。"""
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    # 直接用 URL 建引擎，不再经过 engine_from_config：
+    # 后者要读回 ini 里的值，会再走一次 configparser 插值（见上面的 % 转义说明）。
+    connectable = create_engine(URL, poolclass=pool.NullPool, future=True)
 
     with connectable.connect() as connection:
         context.configure(
