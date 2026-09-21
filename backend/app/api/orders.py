@@ -7,7 +7,7 @@
 不再信任请求体里的 user_id —— 这是防冒充下单的关键。订单列表/详情对非管理员
 按 user_id 收口为「仅自己的订单」；推进订单流转（actions）属于后台运营操作，仅管理员可执行。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload

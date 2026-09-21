@@ -15,7 +15,7 @@ RBAC（角色权限，已落地）：
 - 普通买家只能改**自己**的资料、只看**自己**的订单；
 - 越权访问他人资源统一返回 404，不泄露「该用户是否存在」。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -114,8 +114,8 @@ def _set_default_address(db: Session, user_id: int, target: Address) -> None:
 def list_users(
     active_only: bool = False,
     # limit=0 表示不分页（返回全部）
-    limit: int = 0,
-    offset: int = 0,
+    limit: int = Query(0, ge=0, le=500),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):

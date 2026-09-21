@@ -1,7 +1,7 @@
 """商品与库存 API。"""
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -71,8 +71,8 @@ def list_products(
     keyword: str = "",
     status: str = "on_sale",
     # limit=0 表示不分页（返回全部）：SKU 下拉框要拿全量商品，不能被截断
-    limit: int = 0,
-    offset: int = 0,
+    limit: int = Query(0, ge=0, le=500),
+    offset: int = Query(0, ge=0),
     # 补鉴权：README 约定「除 /health 与 auth 外所有接口都必须携带身份凭证」，
     # 此前该接口（以及下面的上下架）漏了依赖，未登录也能调用
     current_user: User = Depends(get_current_user),

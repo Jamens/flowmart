@@ -24,5 +24,10 @@ def apply_pagination(stmt, limit: int = 0, offset: int = 0):
 
 
 def total_count(db: Session, stmt) -> int:
-    """统计查询的总行数（忽略已有的排序与加载选项，只看过滤条件）。"""
-    return db.execute(select(func.count()).select_from(stmt.subquery())).scalar() or 0
+    """统计查询的总行数（忽略已有的排序与加载选项，只看过滤条件）。
+
+    防御：显式 order_by(None) 剥掉排序，避免调用方万一先 apply 了 order_by 时
+    把排序列带进 count 子查询（某些方言会因此报错）。join 类加载（joinedload）
+    仍可能让 count 膨胀，约定列表接口用 selectinload（单独的预加载查询，不影响 count）。
+    """
+    return db.execute(select(func.count()).select_from(stmt.order_by(None).subquery())).scalar() or 0
