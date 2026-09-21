@@ -94,7 +94,26 @@ export const api = {
   deleteCategory: (id) => request(`/categories/${id}`, { method: 'DELETE' }),
 
   // 收货地址（必须走 /users/{id}/addresses：用户详情不返回地址，避免 PII 泄露）
+  // 注意：地址接口强制归属校验，路径 user_id 必须等于令牌用户，
+  // 否则一律 404 —— 即管理员也只能管理自己的地址。
   listAddresses: (userId) => request(`/users/${userId}/addresses`),
+  createAddress: (userId, payload) =>
+    request(`/users/${userId}/addresses`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateAddress: (userId, addressId, payload) =>
+    request(`/users/${userId}/addresses/${addressId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteAddress: (userId, addressId) =>
+    request(`/users/${userId}/addresses/${addressId}`, { method: 'DELETE' }),
+
+  // 用户管理（列表/创建/禁用仅管理员；改资料本人或管理员）
+  listUsers: (activeOnly = false) =>
+    request(`/users${activeOnly ? '?active_only=true' : ''}`),
+  createUser: (payload) => request('/users', { method: 'POST', body: JSON.stringify(payload) }),
+  updateUser: (id, payload) =>
+    request(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  disableUser: (id) => request(`/users/${id}`, { method: 'DELETE' }),
 
   // 流程定义
   listDefinitions: () => request('/workflows/definitions'),
