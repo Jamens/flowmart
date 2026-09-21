@@ -56,7 +56,7 @@ def list_tables(db: Session = Depends(get_db)):
     result = []
     for name in _tables(insp):
         try:
-            count = db.execute(text(f'SELECT COUNT(*) FROM {_q(name)}')).scalar()
+            count = db.execute(text(f"SELECT COUNT(*) FROM {_q(name)}")).scalar()
         except Exception:  # noqa: BLE001
             count = -1
         cols = insp.get_columns(name)
@@ -65,10 +65,17 @@ def list_tables(db: Session = Depends(get_db)):
                 "name": name,
                 "rows": count,
                 "columns": len(cols),
-                "pk": [c["name"] for c in insp.get_pk_constraint(name).get("constrained_columns", [])],
+                # constrained_columns 是列名字符串列表（如 ['id']），不是字典
+                "pk": _pk_columns(insp, name),
             }
         )
     return {"tables": result}
+
+
+def _pk_columns(insp, table: str) -> list[str]:
+    """取主键列名。不同方言下 get_pk_constraint 可能返回 None 或缺字段。"""
+    constraint = insp.get_pk_constraint(table) or {}
+    return list(constraint.get("constrained_columns") or [])
 
 
 @router.get("/tables/{name}", summary="表结构 + 数据预览")
@@ -76,6 +83,7 @@ def read_table(name: str, limit: int = 100, db: Session = Depends(get_db)):
     insp = inspect(db.bind)
     tbl = _assert_table(insp, name)
     limit = max(1, min(limit, 500))
+    pk_cols = _pk_columns(insp, tbl)
 
     columns = [
         {
@@ -83,7 +91,7 @@ def read_table(name: str, limit: int = 100, db: Session = Depends(get_db)):
             "type": str(c["type"]),
             "nullable": bool(c.get("nullable", True)),
             "default": str(c.get("default")) if c.get("default") is not None else None,
-            "pk": c["name"] in insp.get_pk_constraint(tbl).get("constrained_columns", []),
+            "pk": c["name"] in pk_cols,
         }
         for c in insp.get_columns(tbl)
     ]
