@@ -79,8 +79,11 @@ def _validate_target(channel: str, target: str) -> None:
         raise VerificationError("手机号格式不正确")
 
 
-def request_code(db, user: User, channel: str, target: str) -> str:
+def request_code(db, user: User, channel: str, target: str, purpose: str = "verify") -> str:
     """申请验证码：校验 target 格式 → 重发限流 → 作废旧码 → 生成并发送。
+
+    purpose 区分验证码用途（默认 "verify" 验证联系方式；"reset" 用于找回密码），
+    不同用途的码互不通用，confirm_code 会按 purpose 过滤，避免被跨用途复用。
 
     返回明文 code，仅用于开发环境（OTP_DEV_RETURN_CODE=True）由接口回传；
     生产环境该开关必须为 False，调用方不应依赖返回值。
@@ -120,7 +123,7 @@ def request_code(db, user: User, channel: str, target: str) -> str:
         channel=channel,
         target=target,
         code=code,
-        purpose="verify",
+        purpose=purpose,
         # 显式用 Python 时钟写 created_at，保证与下方重发限流窗口（同用 datetime.now()）时钟基准一致；
         # 否则 DB 的 server_default func.now() 是 UTC，与本地时钟比较会恒为假，限流失效。
         created_at=now,
@@ -134,8 +137,12 @@ def request_code(db, user: User, channel: str, target: str) -> str:
     return code
 
 
-def confirm_code(db, user: User, channel: str, target: str, code: str) -> None:
-    """确认验证码：取最新一条未消费且未过期的码，常量时间比对后置位验证状态。"""
+def confirm_code(db, user: User, channel: str, target: str, code: str, purpose: str = "verify") -> None:
+    """确认验证码：取最新一条未消费且未过期、且 purpose 匹配的码，常量时间比对后置位验证状态。
+
+    purpose 必须与 request_code 时一致（默认 "verify"），否则视为无效 —— 确保找回密码用的
+    reset 码不能被拿去当验证联系方式用，反之亦然。
+    """
     if channel not in ("email", "phone"):
         raise VerificationError("channel 必须为 email 或 phone")
     now = datetime.now()
@@ -146,6 +153,7 @@ def confirm_code(db, user: User, channel: str, target: str, code: str) -> None:
             VerificationCode.user_id == user.id,
             VerificationCode.channel == channel,
             VerificationCode.target == target,
+            VerificationCode.purpose == purpose,
             VerificationCode.consumed_at.is_(None),
             VerificationCode.expires_at > now,
         )
@@ -164,10 +172,14 @@ def confirm_code(db, user: User, channel: str, target: str, code: str) -> None:
         raise VerificationError("验证码错误")
 
     vc.consumed_at = now
-    if channel == "email":
-        user.email = target
-        user.email_verified = True
-    else:  # phone
-        user.phone = target
-        user.phone_verified = True
+    # 只有「验证联系方式」用途才绑定联系方式并置位 verified。
+    # 找回密码（purpose="reset"）若也置位，会让一次改密悄悄撤销掉管理员此前的「撤销验证」——
+    # 被撤销验证的账号本应被登录闸门挡住，凭改密就能重新登录等于把闸门绕过去了。
+    if purpose == "verify":
+        if channel == "email":
+            user.email = target
+            user.email_verified = True
+        else:  # phone
+            user.phone = target
+            user.phone_verified = True
     db.commit()

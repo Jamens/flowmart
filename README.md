@@ -150,6 +150,13 @@ python -m alembic downgrade -1
 - **登录强约束（已落地）**：`POST /api/v1/auth/login` 校验「已验证邮箱或手机**至少其一**」，否则返回 `403`（detail 指引先走验证），与下单闸门同源——未验证账号无法进入系统。为避免把存量未验证用户（含初始管理员 `BOOTSTRAP_ADMIN`）永久锁死，`seed.py` / `init_db._backfill_admin` 已把演示/初始管理员置为 `email_verified=True`；真实用户走下方自助验证即可登录。
 - **验证入口允许未登录自助**：`/auth/verification/send` 与 `/confirm` 改用 `get_optional_current_user` + 账号密码自证（`_resolve_verification_user`）——已登录走令牌，未登录在登录前凭 `username`/`password` 自证身份也能申请并确认验证码。否则未验证用户会陷入「验证要令牌 → 没令牌登录被拦 → 永远无法验证」的死锁。
 
+### 找回密码与修改密码（`app/api/auth.py` + `app/core/verification.py`）
+
+- **找回密码（无需旧密码）**：`POST /auth/password/reset/send` 对**已验证**的邮箱/手机申请验证码，`POST /auth/password/reset/confirm` 凭码设置新密码。面向「忘记密码」以及生产环境被空密码告警拦住的账号——这类用户本来就登不进系统、拿不出旧密码，身份由「用户名 + 控制已验证联系方式（OTP 证明）」承担。
+- **投递地址取自库中已验证联系方式**，而非客户端随意填写的 `target`，避免钓鱼/误填；渠道未验证直接 `400`，不发码。
+- **与验证用 OTP 用途隔离**：`request_code` / `confirm_code` 新增 `purpose` 参数（默认 `verify`），找回码为 `purpose="reset"`，双方互不通用——找回码不能拿去当验证用，反之亦然（由 `tests/test_password_reset.py::test_reset_code_not_reusable_for_verify` 守住）。
+- **登录态自助改密**：`PATCH /auth/me/password` 需提供正确的原密码后才能改密，补上原先只有管理员能经 `users.update_user` 改密码的缺口——普通用户此前无法自助改密。
+
 ### REST API
 
 | 方法 | 路径 | 说明 |
@@ -160,6 +167,9 @@ python -m alembic downgrade -1
 | POST | `/api/v1/auth/logout` | 退出登录（清除 httpOnly Cookie） |
 | POST | `/api/v1/auth/verification/send` | 申请邮箱/手机验证码（开发环境回传 dev_code；**支持登录前凭账号密码自证身份**） |
 | POST | `/api/v1/auth/verification/confirm` | 确认验证码并标记对应渠道已验证（**未登录凭账号密码自证亦可**） |
+| POST | `/api/v1/auth/password/reset/send` | 申请找回密码验证码（**无需旧密码**；发往已验证邮箱/手机） |
+| POST | `/api/v1/auth/password/reset/confirm` | 凭验证码重置密码（**无需旧密码**） |
+| PATCH | `/api/v1/auth/me/password` | 登录用户修改自己的密码（需提供正确的原密码） |
 | GET | `/api/v1/products` | 商品列表（含 SKU） |
 | POST | `/api/v1/products` | 创建商品 |
 | GET | `/api/v1/orders` | 订单列表（管理员见全部，买家仅见自己的订单） |
@@ -171,7 +181,8 @@ python -m alembic downgrade -1
 | POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空；**与下单共用验证闸门**，未验证返回 `403`） |
 | GET | `/api/v1/users` | 用户列表（active_only 过滤） |
 
-> **鉴权**：除 `/health` 与 `/auth/login`、`/auth/register`、`/auth/logout` 外，所有接口都必须携带身份凭证
+> **鉴权**：除 `/health` 与 `/auth/login`、`/auth/register`、`/auth/logout`，以及免登录自助入口
+> （`/auth/verification/send|confirm`、`/auth/password/reset/send|confirm`）外，所有接口都必须携带身份凭证
 > —— 优先 `Authorization: Bearer <token>`（API 客户端 / 测试），浏览器同源请求也可走 `HttpOnly` Cookie。
 > 订单归属、购物车、地址都取自令牌中的用户身份，**不再信任请求体/路径里的 `user_id`**，
 > 从根上消除冒充他人下单、看他人地址的越权。
@@ -320,7 +331,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 154 passed）
+- [x] 测试（pytest 全量 164 passed）
 
 ### ❌ 待实现
 
@@ -335,3 +346,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
 - [x] 邮箱 / 手机验证（两步式 OTP：send/confirm；可插拔发送器；DB 重发限流；开发回传 dev_code；**下单与登录均加 403 强约束闸门**；验证入口支持未登录凭账号密码自助验证，避免死锁）
+- [x] 找回密码与改密码（reset 两步式：已验证邮箱/手机收码 → 凭码重置，**无需旧密码**；投递地址取库中已验证联系方式；`purpose` 隔离防找回码与验证码跨用途复用；登录态 `PATCH /auth/me/password` 凭原密码自助改密，补上原先仅管理员可改密的缺口）
+- [x] init_db 演示密码回填仅限开发环境（`_backfill_demo_passwords` 仅在 `DEBUG=True` 生效；生产 `DEBUG=False` 跳过回填仅告警，绝不静默赋已知明文密码）

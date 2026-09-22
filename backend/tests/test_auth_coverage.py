@@ -30,7 +30,14 @@ REFRESH_AUTH = {f"{API}/auth/refresh"}
 # 验证码申请/确认是「未验证用户自助验证」的入口，必须允许未登录访问（否则未验证用户
 # 会卡死在登录闸门之外永远无法验证）。它们用 get_optional_current_user 解析身份，
 # 已登录走令牌、未登录凭账号密码自证，故不要求 get_current_user，单独列出。
-SELF_SERVICE = {f"{API}/auth/verification/send", f"{API}/auth/verification/confirm"}
+# 找回密码 send/confirm 同理：面向「忘了密码、登不进系统」的用户，必须未登录可访问，
+# 身份由「用户名 + 控制已验证联系方式（OTP 证明）」承担，故也不要求 get_current_user。
+SELF_SERVICE = {
+    f"{API}/auth/verification/send",
+    f"{API}/auth/verification/confirm",
+    f"{API}/auth/password/reset/send",
+    f"{API}/auth/password/reset/confirm",
+}
 
 MODULES = [auth, products, categories, cart, users, orders, workflows, admin_db]
 

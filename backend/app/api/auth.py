@@ -241,3 +241,104 @@ def confirm_verification(
         "email_verified": target_user.email_verified,
         "phone_verified": target_user.phone_verified,
     }
+
+
+class PasswordResetRequestIn(BaseModel):
+    username: str = Field(..., min_length=1)
+    channel: Literal["email", "phone"]
+
+
+class PasswordResetConfirmIn(BaseModel):
+    username: str = Field(..., min_length=1)
+    channel: Literal["email", "phone"]
+    code: str = Field(..., min_length=1, max_length=16)
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+class ChangePasswordIn(BaseModel):
+    old_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+def _reset_target(user: User, channel: str) -> str:
+    """取该渠道在库中已验证的联系方式作为验证码投递地址；该渠道未验证则报错。
+
+    验证码只发往账号自身已验证的联系方式，而非客户端随意填写的 target ——
+    既能避免钓鱼/误填，也天然要求「先验证过联系方式」才能找回密码。
+    """
+    if channel == "email":
+        if not user.email_verified:
+            raise HTTPException(status_code=400, detail="该邮箱尚未验证，无法用于找回密码")
+        return user.email
+    if not user.phone_verified:
+        raise HTTPException(status_code=400, detail="该手机尚未验证，无法用于找回密码")
+    return user.phone
+
+
+@router.post("/password/reset/send", summary="申请找回密码验证码（无需旧密码）")
+def password_reset_send(payload: PasswordResetRequestIn, db: Session = Depends(get_db)):
+    """账号找回：对已验证邮箱/手机申请验证码，无需提供旧密码（面向忘记密码 / 生产空密码账号）。
+
+    身份 = 用户名 + 控制已验证联系方式（由 OTP 证明），因此不需要旧密码。
+    验证码发往该渠道在库中的已验证联系方式，而非客户端填写的 target。
+    """
+    user = db.scalar(select(User).where(User.username == payload.username))
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="账号不存在或已禁用")
+    target = _reset_target(user, payload.channel)
+    try:
+        code = request_code(db, user, payload.channel, target, purpose="reset")
+    except VerificationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    resp = {"sent": True, "channel": payload.channel, "expires_in": settings.OTP_TTL_SECONDS}
+    if settings.OTP_DEV_RETURN_CODE:
+        resp["dev_code"] = code
+    return resp
+
+
+@router.post("/password/reset/confirm", summary="凭验证码重置密码")
+def password_reset_confirm(payload: PasswordResetConfirmIn, db: Session = Depends(get_db)):
+    """确认找回验证码后设置新密码。身份 = 用户名 + 控制已验证联系方式（OTP 证明），无需旧密码。
+
+    与验证联系方式用的 OTP 通过 purpose="reset" 隔离：找回码不能拿去当验证用，反之亦然。
+    """
+    user = db.scalar(select(User).where(User.username == payload.username))
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="账号不存在或已禁用")
+    target = _reset_target(user, payload.channel)
+    try:
+        confirm_code(db, user, payload.channel, target, payload.code, purpose="reset")
+    except VerificationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return {"reset": True, "username": user.username}
+
+
+@router.patch("/me/password", summary="登录用户修改自己的密码")
+def change_password(
+    payload: ChangePasswordIn,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """已登录用户修改自身密码：需提供正确的原密码，防他人借已登录会话偷偷改密。
+
+    这补上了原先只有管理员能经 users.update_user 改密码的缺口——普通用户此前无法自助改密。
+    改错原密码复用了登录限流（同一 IP + 用户名窗口计数），避免被拿来循环试原密码，
+    也避免反复触发 20 万次 PBKDF2 造成 CPU 放大。
+    """
+    if login_limiter.is_blocked(request, user.username):
+        retry = login_limiter.retry_after(request, user.username)
+        raise HTTPException(
+            status_code=429,
+            detail=f"修改密码失败次数过多，请 {retry} 秒后再试",
+            headers={"Retry-After": str(retry)},
+        )
+    if not verify_password(payload.old_password, user.password_hash):
+        login_limiter.register_failure(request, user.username)
+        raise HTTPException(status_code=400, detail="原密码错误")
+    login_limiter.reset(request, user.username)
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return {"changed": True}
