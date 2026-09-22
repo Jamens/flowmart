@@ -199,21 +199,34 @@ def seed_users(db) -> tuple[int, int, int]:
         user.email_verified = True
         users[username] = user.id
 
-    addr_id = None
-    addr = db.execute(select(Address).where(Address.user_id == users["zhangsan"])).scalars().first()
-    if addr is None:
-        addr = Address(
-            user_id=users["zhangsan"], receiver="张三", phone="13800000001",
-            province="广东省", city="深圳市", district="南山区",
-            detail="科技园南路 88 号 A 座 1201", is_default=True,
-        )
-        db.add(addr)
-        db.flush()
-    addr_id = addr.id
+    # 每个用户各自的收货地址：create_order 会校验地址归属（防 IDOR），
+    # 拿别人的 address_id 下单会被判「不存在」，所以不能共用一个地址。
+    addr_ids: dict[int, int] = {}
+    demo_addresses = {
+        "zhangsan": ("张三", "13800000001", "科技园南路 88 号 A 座 1201"),
+        "lisi": ("李四", "13800000002", "后海大道 1001 号 B 座 3302"),
+    }
+    for username, (receiver, phone, detail) in demo_addresses.items():
+        uid = users[username]
+        addr = db.execute(select(Address).where(Address.user_id == uid)).scalars().first()
+        if addr is None:
+            addr = Address(
+                user_id=uid, receiver=receiver, phone=phone,
+                province="广东省", city="深圳市", district="南山区",
+                detail=detail, is_default=True,
+            )
+            db.add(addr)
+            db.flush()
+        addr_ids[uid] = addr.id
     db.commit()
     ensure_admin_exists(db)  # 收尾校验：零管理员则启动报错，避免静默锁死
     print(f"[seed] 用户就绪：{len(users)} 人")
-    return users["zhangsan"], users["lisi"], addr_id
+    return (
+        users["zhangsan"],
+        users["lisi"],
+        addr_ids[users["zhangsan"]],
+        addr_ids[users["lisi"]],
+    )
 
 
 def clear_business_data(db) -> None:
@@ -227,13 +240,15 @@ def clear_business_data(db) -> None:
     print("[seed] 已清空历史订单与流程实例")
 
 
-def seed_orders(db, sku_map: dict[str, int], u1: int, u2: int, addr_id: int) -> None:
+def seed_orders(db, sku_map: dict[str, int], u1: int, u2: int, addr1: int, addr2: int) -> None:
     """创建覆盖各状态的演示订单。"""
     svc = OrderService(db)
 
     def mk(user_id, sku_code, qty, addr=True):
+        # 必须用下单用户本人的地址：create_order 有归属校验，他人地址会被判不存在
+        own_addr = addr1 if user_id == u1 else addr2
         return {"user_id": user_id, "items": [{"sku_id": sku_map[sku_code], "quantity": qty}],
-                "address_id": addr_id if addr else None}
+                "address_id": own_addr if addr else None}
 
     plans = [
         ("已完成", mk(u1, "APP2-USBC", 1), ["pay", "ship", "confirm"]),
@@ -270,7 +285,7 @@ def main() -> None:
     try:
         seed_workflow(db)
         sku_map = seed_catalog(db)
-        u1, u2, addr_id = seed_users(db)
+        u1, u2, addr1, addr2 = seed_users(db)
 
         if args.reset:
             clear_business_data(db)
@@ -278,7 +293,7 @@ def main() -> None:
         if existing_orders and not args.reset:
             print(f"[seed] 已存在 {len(existing_orders)} 个订单，跳过（如需重建加 --reset）")
         else:
-            seed_orders(db, sku_map, u1, u2, addr_id)
+            seed_orders(db, sku_map, u1, u2, addr1, addr2)
 
         # 汇总
         print("\n[seed] ---- 数据概览 ----")
