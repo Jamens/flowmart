@@ -13,7 +13,7 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import create_engine, inspect, select, text  # noqa: E402
+from sqlalchemy import create_engine, inspect, or_, select, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
@@ -56,11 +56,26 @@ def _ensure_password_column(engine, dialect: str) -> None:
 
 
 def _backfill_demo_passwords(engine) -> None:
-    """开发便利：给无密码的用户设置演示密码 123456，避免存量账号无法登录。"""
+    """开发便利：给无密码用户设置演示密码 123456。
+
+    仅 DEBUG（开发）环境生效——这是本地联调用便利，绝不是生产行为。
+    生产环境（DEBUG=False）**绝不**静默写入已知明文密码：否则迁移 / 外部认证等
+    导致 password_hash 为空的存量账户会被统一设为 123456，造成账号被接管。
+    生产环境这类账户应走正式「找回密码」流程重置，而非被脚本悄悄赋密码。
+    """
     Session = sessionmaker(bind=engine)
     with Session() as s:
-        empties = s.execute(select(User).where(User.password_hash == "")).scalars().all()
+        empties = s.execute(
+            select(User).where(or_(User.password_hash == "", User.password_hash.is_(None)))
+        ).scalars().all()
         if not empties:
+            return
+        if not settings.DEBUG:
+            # 生产环境不静默赋已知密码，避免账号被接管
+            print(
+                f"[init_db][警告] 发现 {len(empties)} 个无密码账户，"
+                "生产环境已跳过回填演示密码；请通过「找回密码」流程为其重置密码"
+            )
             return
         for u in empties:
             u.password_hash = hash_password("123456")
@@ -227,8 +242,10 @@ def main() -> None:
     # 同样补齐 RBAC 所需的 is_admin 列
     _ensure_admin_column(engine, dialect)
 
-    # 开发便利：为没有密码的用户回填演示密码 123456，避免存量账号无法登录。
-    # 生产环境应改成强制用户走「首次登录设置密码」，这里仅本地演示用。
+    # 开发便利：为没有密码的用户回填演示密码 123456，仅 DEBUG（开发）环境生效。
+    # 生产环境（DEBUG=False）绝不静默写入已知明文密码，避免存量/迁移账户被统一接管；
+    # 这类账户应走正式「找回密码」流程。与其它生产安全闸门
+    # （SECRET_KEY / COOKIE_SECURE / OTP_DEV_RETURN_CODE）同源。
     _backfill_demo_passwords(engine)
 
     # 开发便利：把配置的初始管理员（settings.BOOTSTRAP_ADMIN）标记为 is_admin，避免存量库无管理员可用。

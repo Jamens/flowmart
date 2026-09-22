@@ -135,6 +135,7 @@ python -m alembic downgrade -1
   - **登录限流（防暴力破解）**：`POST /auth/login` 按 `(客户端IP, 用户名)` 固定窗口计数失败次数，窗口内（`LOGIN_RATE_LIMIT_WINDOW`，默认 60 秒）失败超 `LOGIN_RATE_LIMIT_MAX`（默认 5 次）即返回 `429` 并带 `Retry-After` 头；登录成功清空计数，避免正常用户被旧失败数误伤；禁用账号不计失败次数。
     - **可插拔存储**：默认进程内内存（`MemoryStore`，单实例够用、零依赖）；多实例 / 负载均衡设 `LOGIN_RATE_LIMIT_REDIS_URL`（如 `redis://127.0.0.1:6379/0`）即切 Redis 后端（`INCR+EXPIRE` 原子计数，限流对全部实例统一生效），连不上启动时直接报错（fail-fast）。后端接口不变（`app/core/ratelimit.py`）。
     - **客户端 IP 安全默认**：默认 `LOGIN_RATE_LIMIT_TRUST_PROXY=False`，取 `request.client.host`（直连真实 socket 地址、无法伪造）；仅当反向代理已用真实客户端 IP 覆写 `X-Forwarded-For` 且显式开 `True` 时才信 XFF 首跳——否则攻击者可伪造不同 XFF 绕过限流。
+    - **`init_db` 演示密码回填仅限开发环境**：`_backfill_demo_passwords` 给无密码用户赋 `123456` 仅当 `DEBUG=True` 生效；生产环境（`DEBUG=False`）**绝不静默写入已知明文密码**（否则迁移 / 外部认证导致的空密码存量账户会被统一接管），仅打印警告，提醒走正式「找回密码」流程。与 `SECRET_KEY` / `COOKIE_SECURE` / `OTP_DEV_RETURN_CODE` 等生产闸门同源。
 
 ### 邮箱 / 手机验证（`app/core/verification.py` + `app/api/auth.py`）
 
