@@ -146,5 +146,6 @@ def test_secret_key_guard_blocks_default_in_prod():
         DEBUG=False,
         SECRET_KEY="a-strong-random-prod-secret-at-least-32-chars",
         COOKIE_SECURE=True,
+        OTP_DEV_RETURN_CODE=False,  # 生产必须关掉验证码明文回传
     )
     assert s.SECRET_KEY == "a-strong-random-prod-secret-at-least-32-chars"

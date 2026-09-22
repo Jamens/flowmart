@@ -136,14 +136,27 @@ python -m alembic downgrade -1
     - **可插拔存储**：默认进程内内存（`MemoryStore`，单实例够用、零依赖）；多实例 / 负载均衡设 `LOGIN_RATE_LIMIT_REDIS_URL`（如 `redis://127.0.0.1:6379/0`）即切 Redis 后端（`INCR+EXPIRE` 原子计数，限流对全部实例统一生效），连不上启动时直接报错（fail-fast）。后端接口不变（`app/core/ratelimit.py`）。
     - **客户端 IP 安全默认**：默认 `LOGIN_RATE_LIMIT_TRUST_PROXY=False`，取 `request.client.host`（直连真实 socket 地址、无法伪造）；仅当反向代理已用真实客户端 IP 覆写 `X-Forwarded-For` 且显式开 `True` 时才信 XFF 首跳——否则攻击者可伪造不同 XFF 绕过限流。
 
+### 邮箱 / 手机验证（`app/core/verification.py` + `app/api/auth.py`）
+
+- 两步式：`POST /auth/verification/send` 申请一次性 OTP，`POST /auth/verification/confirm` 确认；确认成功后把 target 绑定到账号并置对应渠道的 `*_verified=True`。
+- 验证码用 `secrets` 生成（密码学随机，非 `random`）；确认用 `hmac.compare_digest` 常量时间比对，防时序侧信道。
+- **防爆破**：单个验证码的确认尝试超过 `OTP_CONFIRM_MAX_ATTEMPTS`（默认 5）即锁定该码（置 `consumed_at`），避免对 6 位码暴力枚举；重发本身另有窗口限流。
+- **可插拔发送器**：`VerificationSender` ABC + `ConsoleSender`（开发期打印到日志）；`smtp` / `sms` 是预留扩展点，未实现时配了会启动即报错（fail-fast）。
+- **重发限流基于 DB**（同一用户对同一渠道在时间窗内最多 N 次），天然多实例安全，不依赖进程内内存或 Redis；每次申请都会作废同渠道同 target 的未消费旧码，防重放。
+- **开发便利开关**：`OTP_DEV_RETURN_CODE=True`（默认）时 `send` 接口在响应里回传 `dev_code`，便于联调与测试；生产**必须 False**，配置校验会强制（`DEBUG=False` 下仍为 True 即启动报错）。
+- 模型新增 `User.email` / `email_verified` / `phone_verified` 三列，并新建 `verification_codes` 表；已生成 Alembic 迁移（与 `alembic check` 守卫一致）。注册接口支持可选 `email`。
+- **当前为可叠加式验证**：不强制注册时验证，现有注册/登录与全部接口行为不变；若需「未验证不能下单/登录」等强约束，需在业务层按 `*_verified` 加闸门（待定）。
+
 ### REST API
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/v1/auth/register` | 注册（直接返回 token） |
 | POST | `/api/v1/auth/login` | 登录换取 JWT |
-| GET | `/api/v1/auth/me` | 当前登录用户 |
+| GET | `/api/v1/auth/me` | 当前登录用户（含 email / email_verified / phone_verified） |
 | POST | `/api/v1/auth/logout` | 退出登录（清除 httpOnly Cookie） |
+| POST | `/api/v1/auth/verification/send` | 申请邮箱/手机验证码（开发环境回传 dev_code） |
+| POST | `/api/v1/auth/verification/confirm` | 确认验证码并标记对应渠道已验证 |
 | GET | `/api/v1/products` | 商品列表（含 SKU） |
 | POST | `/api/v1/products` | 创建商品 |
 | GET | `/api/v1/orders` | 订单列表（管理员见全部，买家仅见自己的订单） |
@@ -304,7 +317,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 134 passed）
+- [x] 测试（pytest 全量 145 passed）
 
 ### ❌ 待实现
 
@@ -318,4 +331,4 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
-- [ ] （可选）邮箱 / 手机验证
+- [x] 邮箱 / 手机验证（两步式 OTP：send/confirm；可插拔发送器；DB 重发限流；开发回传 dev_code；不强制注册时验证）

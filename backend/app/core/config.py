@@ -55,6 +55,19 @@ class Settings(BaseSettings):
     # 例如 "redis://127.0.0.1:6379/0"。连不上会在启动时直接报错（fail-fast）。
     LOGIN_RATE_LIMIT_REDIS_URL: str = ""
 
+    # 邮箱/手机验证码（OTP）：申请→确认两步式，确认后标记对应渠道已验证。
+    OTP_LENGTH: int = 6  # 验证码位数（纯数字）
+    OTP_TTL_SECONDS: int = 600  # 验证码有效期（10 分钟）
+    # 重发限流（基于 DB，天然多实例安全）：同一用户对同一渠道在窗口内最多发 N 次
+    OTP_RESEND_WINDOW: int = 60  # 秒
+    OTP_MAX_PER_WINDOW: int = 5
+    # 单个验证码的确认尝试上限：超过即锁定该码（防对 6 位码暴力枚举）
+    OTP_CONFIRM_MAX_ATTEMPTS: int = 5
+    # 发送接口是否把验证码直接回传（仅开发便利）。生产必须 False，否则等于把验证码明文交给客户端。
+    OTP_DEV_RETURN_CODE: bool = True
+    # 验证码发送器：当前仅 "console"（print 到日志，开发可用）；smtp / sms 为可插拔扩展点，未实现时配了会启动报错。
+    OTP_SENDER: str = "console"
+
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306
@@ -96,6 +109,14 @@ class Settings(BaseSettings):
         self.BOOTSTRAP_ADMIN = self.BOOTSTRAP_ADMIN.strip()
         if not self.BOOTSTRAP_ADMIN:
             raise ValueError("BOOTSTRAP_ADMIN 不能为空：必须指定一个初始管理员用户名")
+        return self
+
+    @model_validator(mode="after")
+    def _require_no_dev_otp_in_prod(self):
+        # 生产（非 debug）下若 OTP_DEV_RETURN_CODE 仍为 True，发送验证码接口会把明文 OTP 回传给客户端，
+        # 等于没有验证。必须启动即报错，绝不悄悄把验证码交给前端。
+        if not self.DEBUG and self.OTP_DEV_RETURN_CODE:
+            raise ValueError("生产环境必须 OTP_DEV_RETURN_CODE=False，否则验证码会被明文回传")
         return self
 
     @property

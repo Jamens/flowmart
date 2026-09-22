@@ -48,6 +48,15 @@ class User(TimestampMixin, Base):
     # 是否管理员：RBAC 角色闸门（require_admin）的依据。普通用户只能操作自己的资源，
     # 建账号 / 禁用用户 / 推进订单流转等管理操作仅管理员可执行。
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # 邮箱与验证状态（邮箱/手机验证功能使用）。email 可空、未验证前为 ""；
+    # *_verified 标记该渠道是否已完成验证，置位的同时会把 target 绑定到账号上。
+    email: Mapped[str] = mapped_column(String(255), nullable=True, default="", server_default="")
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    phone_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
 
 class Address(TimestampMixin, Base):
@@ -202,3 +211,32 @@ class Payment(TimestampMixin, Base):
     # pending=待支付, success=已支付, failed=失败, refunded=已退款
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     paid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
+class VerificationCode(TimestampMixin, Base):
+    """验证码：邮箱/手机验证用的一次性 OTP。
+
+    channel=email|phone，target 为收件邮箱或手机号，code 为一次性口令。
+    expires_at 之后失效；consumed_at 非 NULL 表示已被使用（作废旧码防重放）。
+    """
+
+    __tablename__ = "verification_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False, index=True
+    )
+    # email | phone
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 收件邮箱或手机号
+    target: Mapped[str] = mapped_column(String(255), nullable=False)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False, default="verify")
+    # 过期时间；超过即失效
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # 使用时间；非 NULL 表示已消费
+    consumed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # 确认尝试次数：达到上限即锁定（置 consumed_at），防对单个码暴力枚举
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    user: Mapped["User"] = relationship("User")

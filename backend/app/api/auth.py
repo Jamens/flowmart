@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from typing import Literal
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -25,6 +26,7 @@ from app.core.security import (
     set_refresh_cookie,
     verify_password,
 )
+from app.core.verification import VerificationError, confirm_code, request_code
 from app.models.ecommerce import User
 
 router = APIRouter(prefix="/auth", tags=["认证"])
@@ -35,6 +37,7 @@ class RegisterIn(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
     nickname: str = ""
     phone: str = ""
+    email: str = ""
 
 
 class LoginIn(BaseModel):
@@ -50,6 +53,7 @@ def register(payload: RegisterIn, response: Response, db: Session = Depends(get_
         username=payload.username,
         nickname=payload.nickname,
         phone=payload.phone,
+        email=payload.email,
         password_hash=hash_password(payload.password),
     )
     db.add(user)
@@ -142,5 +146,57 @@ def me(user: User = Depends(get_current_user)):
         "username": user.username,
         "nickname": user.nickname,
         "phone": user.phone,
+        "email": user.email or "",
+        "email_verified": user.email_verified,
+        "phone_verified": user.phone_verified,
         "is_active": user.is_active,
+    }
+
+
+class VerificationSendIn(BaseModel):
+    channel: Literal["email", "phone"]
+    target: str = Field(..., min_length=1, max_length=255)
+
+
+class VerificationConfirmIn(BaseModel):
+    channel: Literal["email", "phone"]
+    target: str = Field(..., min_length=1, max_length=255)
+    code: str = Field(..., min_length=1, max_length=16)
+
+
+@router.post("/verification/send", summary="申请邮箱/手机验证码")
+def send_verification(
+    payload: VerificationSendIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """申请一次性验证码。开发环境（OTP_DEV_RETURN_CODE=True）会在响应里回传 dev_code 便于联调，
+    生产必须关掉该开关（配置校验会强制）。"""
+    try:
+        code = request_code(db, user, payload.channel, payload.target)
+    except VerificationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    resp = {"sent": True, "channel": payload.channel, "expires_in": settings.OTP_TTL_SECONDS}
+    if settings.OTP_DEV_RETURN_CODE:
+        resp["dev_code"] = code
+    return resp
+
+
+@router.post("/verification/confirm", summary="确认验证码并标记渠道已验证")
+def confirm_verification(
+    payload: VerificationConfirmIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """确认成功后：email 渠道会绑定邮箱并置 email_verified；phone 渠道置 phone_verified。"""
+    try:
+        confirm_code(db, user, payload.channel, payload.target, payload.code)
+    except VerificationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return {
+        "verified": True,
+        "channel": payload.channel,
+        "email": user.email or "",
+        "email_verified": user.email_verified,
+        "phone_verified": user.phone_verified,
     }
