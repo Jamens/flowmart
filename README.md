@@ -145,7 +145,8 @@ python -m alembic downgrade -1
 - **重发限流基于 DB**（同一用户对同一渠道在时间窗内最多 N 次），天然多实例安全，不依赖进程内内存或 Redis；每次申请都会作废同渠道同 target 的未消费旧码，防重放。
 - **开发便利开关**：`OTP_DEV_RETURN_CODE=True`（默认）时 `send` 接口在响应里回传 `dev_code`，便于联调与测试；生产**必须 False**，配置校验会强制（`DEBUG=False` 下仍为 True 即启动报错）。
 - 模型新增 `User.email` / `email_verified` / `phone_verified` 三列，并新建 `verification_codes` 表；已生成 Alembic 迁移（与 `alembic check` 守卫一致）。注册接口支持可选 `email`。
-- **当前为可叠加式验证**：不强制注册时验证，现有注册/登录与全部接口行为不变；若需「未验证不能下单/登录」等强约束，需在业务层按 `*_verified` 加闸门（待定）。
+- **下单强约束（已落地）**：`POST /api/v1/orders` 与 `POST /api/v1/cart/checkout` **共用同一依赖 `require_verified_contact`**（单一事实来源，杜绝绕过），在 API 层校验「当前用户已验证邮箱或手机**至少其一**」，否则返回 `403`（detail 指引先走 send/confirm）。**服务层 `OrderService.create_order` 不受限**——后台运营/迁移等直接调用路径不应被账户合规约束拦截；验证状态取运行时实时值，撤销验证后会被重新拦截。
+- **只锁下单、不锁登录**：当前强约束仅作用于下单。登录仍不强制验证，避免把全部存量未验证用户（含初始管理员 `BOOTSTRAP_ADMIN`）直接锁死、破坏现有流程。若以后要「未验证不能登录」等更强约束，同理在 `auth.login` 按 `*_verified` 加闸门即可（已预留落点）。
 
 ### REST API
 
@@ -160,12 +161,12 @@ python -m alembic downgrade -1
 | GET | `/api/v1/products` | 商品列表（含 SKU） |
 | POST | `/api/v1/products` | 创建商品 |
 | GET | `/api/v1/orders` | 订单列表（管理员见全部，买家仅见自己的订单） |
-| POST | `/api/v1/orders` | 创建订单（自动启动工作流，**归属当前用户**） |
+| POST | `/api/v1/orders` | 创建订单（自动启动工作流，**归属当前用户**；未验证邮箱/手机返回 `403`） |
 | GET | `/api/v1/cart` | 我的购物车列表（含合计） |
 | POST | `/api/v1/cart` | 加入购物车（同 SKU 自动累加） |
 | PATCH | `/api/v1/cart/{id}` | 修改数量（传 0 表示移除） |
 | DELETE | `/api/v1/cart/{id}` | 移除商品 |
-| POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空） |
+| POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空；**与下单共用验证闸门**，未验证返回 `403`） |
 | GET | `/api/v1/users` | 用户列表（active_only 过滤） |
 
 > **鉴权**：除 `/health` 与 `/auth/login`、`/auth/register`、`/auth/logout` 外，所有接口都必须携带身份凭证
@@ -317,7 +318,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 145 passed）
+- [x] 测试（pytest 全量 150 passed）
 
 ### ❌ 待实现
 
@@ -331,4 +332,4 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
-- [x] 邮箱 / 手机验证（两步式 OTP：send/confirm；可插拔发送器；DB 重发限流；开发回传 dev_code；不强制注册时验证）
+- [x] 邮箱 / 手机验证（两步式 OTP：send/confirm；可插拔发送器；DB 重发限流；开发回传 dev_code；注册不强制验证，**下单已加 403 强约束闸门**）

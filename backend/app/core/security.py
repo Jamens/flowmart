@@ -245,6 +245,22 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+def require_verified_contact(current_user: User = Depends(get_current_user)) -> User:
+    """下单强约束闸门：当前用户须至少验证一种联系方式（邮箱或手机），否则 403。
+
+    仅作用在「面向终端用户的下单入口」（orders.create_order / cart.checkout）。
+    服务层 OrderService.create_order **刻意不加**此约束——后台运营补单、数据迁移等
+    直接调用路径不应被账户合规约束拦截，否则无法补单/迁移历史订单。验证状态取
+    运行时实时值，撤销验证后会被重新拦截。
+    """
+    if not (current_user.email_verified or current_user.phone_verified):
+        raise HTTPException(
+            status_code=403,
+            detail="下单前需先验证邮箱或手机：调用 POST /auth/verification/send 与 /confirm",
+        )
+    return current_user
+
+
 def ensure_admin_exists(db: Session) -> None:
     """seed / 迁移收尾校验：系统中若无任何管理员，启动即报错，避免「谁都不是管理员」静默锁死。
 

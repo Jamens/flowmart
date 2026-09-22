@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.core.pagination import apply_pagination, total_count
-from app.core.security import get_current_user, require_admin
+from app.core.security import get_current_user, require_admin, require_verified_contact
 from app.models.ecommerce import Order, OrderItem, User
 from app.services.order_service import OrderService
 from app.services.workflow_engine import WorkflowError
@@ -149,7 +149,7 @@ def get_order(
 @router.post("", status_code=201, summary="创建订单（自动启动工作流，归属当前用户）")
 def create_order(
     payload: OrderCreateIn,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_contact),
     db: Session = Depends(get_db),
 ):
     svc = OrderService(db)

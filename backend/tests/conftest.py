@@ -43,8 +43,10 @@ def engine(db):
 @pytest.fixture
 def current_user(db):
     """一个已注册（有密码）的默认登录用户，供接口测试充当「当前用户」。"""
+    # 默认代表「已完成入驻、验证过联系方式的正常账号」，避免每个下单相关用例都重复置位。
+    # 验证闸门（未验证禁止下单）的「未验证」分支由专门的闸门用例用临时未验证用户覆盖。
     u = User(username="tester", nickname="测试员", phone="13800000000",
-             password_hash=hash_password("123456"), is_admin=True)
+             password_hash=hash_password("123456"), is_admin=True, email_verified=True)
     db.add(u)
     db.commit()
     db.refresh(u)
@@ -91,8 +93,9 @@ def raw_client(db, order_flow):
 @pytest.fixture
 def buyer_user(db):
     """一个已注册的普通买家（非管理员），供测试买家侧行为。"""
+    # 同 current_user：默认视为已验证的正常买家账号
     u = User(username="buyer", nickname="买家", phone="13800000003",
-             password_hash=hash_password("123456"), is_admin=False)
+             password_hash=hash_password("123456"), is_admin=False, email_verified=True)
     db.add(u)
     db.commit()
     db.refresh(u)

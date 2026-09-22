@@ -128,9 +128,22 @@ def _make_sku(db):
     return sku
 
 
+def _verify(db, username, channel="email"):
+    """测试夹具：直接把某用户置为已验证（绕过 OTP 流程），仅用于下单闸门前的账户合规准备。"""
+    u = db.execute(select(User).where(User.username == username)).scalars().first()
+    assert u is not None
+    if channel == "email":
+        u.email_verified = True
+    else:
+        u.phone_verified = True
+    db.commit()
+
+
 def test_buyer_sees_own_orders_only(raw_client, db, order_flow):
     a = _register(raw_client, "buyerA")
     b = _register(raw_client, "buyerB")
+    _verify(db, "buyerA")
+    _verify(db, "buyerB")
     h_a = _auth(raw_client, _login_token(raw_client, "buyerA"))
     h_b = _auth(raw_client, _login_token(raw_client, "buyerB"))
     sku = _make_sku(db)
@@ -150,6 +163,7 @@ def test_buyer_sees_own_orders_only(raw_client, db, order_flow):
 
 def test_order_action_requires_admin(raw_client, db, order_flow):
     a = _register(raw_client, "opUser")
+    _verify(db, "opUser")
     h = _auth(raw_client, _login_token(raw_client, "opUser"))
     sku = _make_sku(db)
     order = raw_client.post(

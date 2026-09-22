@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_verified_contact
 from app.models.ecommerce import CartItem, Sku, User
 from app.services.order_service import OrderService
 from app.services.workflow_engine import WorkflowError
@@ -188,10 +188,14 @@ def remove_item(
 @router.post("/checkout", status_code=201, summary="结算购物车")
 def checkout(
     payload: CheckoutIn,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_contact),
     db: Session = Depends(get_db),
 ):
-    """购物车结算：生成订单并清空已结算的商品，两者在同一事务内完成。"""
+    """购物车结算：生成订单并清空已结算的商品，两者在同一事务内完成。
+
+    与 orders.create_order 共用同一道「验证闸门」依赖（require_verified_contact），
+    避免购物车结算成为绕过验证的下单后门。
+    """
     user_id = current_user.id
     stmt = select(CartItem).where(CartItem.user_id == user_id)
     if payload.item_ids:
