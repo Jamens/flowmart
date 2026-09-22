@@ -115,11 +115,12 @@ python -m alembic downgrade -1
 ### 鉴权（`app/core/security.py` + `app/api/auth.py`）
 
 - **JWT（HS256）**：登录/注册签发令牌，后续请求在 `Authorization: Bearer` 头携带；
-  令牌只含 `sub`（用户 id）、`iat`、`exp`，用 HMAC-SHA256 签名，`hmac.compare_digest` 常量时间校验防时序攻击。
+  访问令牌只含 `sub`（用户 id）、`iat`、`exp`，用 HMAC-SHA256 签名，`hmac.compare_digest` 常量时间校验防时序攻击；刷新令牌另带 `jti` / `fam`（见下方「刷新令牌轮转」）。
 - **令牌存储改为 httpOnly Cookie（抗 XSS）**：登录/注册在返回 Bearer 令牌（供 API 客户端）的同时，
   把 JWT 写入 `HttpOnly` Cookie；浏览器同源请求由 Cookie 自动携带（`SameSite=Lax`），前端不再用 `localStorage`
   存明文令牌，从根上杜绝 XSS 脚本窃取令牌。新增 `POST /auth/logout` 由后端下发删除指令清除 Cookie
-  （JS 无法删除 HttpOnly Cookie）。`get_current_user` 优先取 Bearer 头、其次取 Cookie。
+  （JS 无法删除 HttpOnly Cookie），**并在服务端撤销该登录会话的刷新令牌**——只清 Cookie 的话，
+  泄露出去的令牌在 7 天有效期内仍可换发访问令牌。`get_current_user` 优先取 Bearer 头、其次取 Cookie。
 - **密码哈希**：PBKDF2-HMAC-SHA256（10 万次迭代）+ 随机盐，存储格式 `pbkdf2$sha256$<iter>$<salt>$<dk>`，
   明文绝不下库；纯标准库实现，无第三方加密依赖。
 - **依赖注入取身份**：`get_current_user` 解析令牌返回用户对象，所有资源接口 `Depends` 它，
@@ -338,6 +339,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 ## 功能清单（状态看板）
 
 > 详细设计见上方「已完成功能」。此处为功能级勾选，便于一眼看清进度。
+> 清单内功能**已全部落地，暂无待实现项**（新增功能请直接追加到下方列表）。
 
 ### ✅ 已实现
 
@@ -353,12 +355,8 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 分类（两级树；删除前应用层校验商品/子分类引用，防间接环）
 - [x] 前端管理后台（订单管理页、流程设计器、登录页）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
-- [x] 工具脚本（init_db / seed / export_schema / export_data_html）
+- [x] 工具脚本（init_db / seed / export_schema / export_data_html / cleanup_refresh_tokens 定期清理）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 181 passed）
-
-### ❌ 待实现
-
 - [x] 购物车前端页面（`CartView.vue`：选 SKU 加购、改数量、移除、合计、选地址结算；数量改动受控渲染，失败回滚到后端真实值）
 - [x] 商品管理页面（`ProductsView.vue`：搜索 / 状态筛选含下架、SKU 展开明细、上架下架、新建商品含动态 SKU 行）
 - [x] 分类管理页面（`CategoriesView.vue`：树形层级、商品数、新建/编辑/删除、加子分类；有子分类或仍被商品引用时后端拒绝删除）
@@ -375,3 +373,4 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 找回密码与改密码（reset 两步式：已验证邮箱/手机收码 → 凭码重置，**无需旧密码**；投递地址取库中已验证联系方式；`purpose` 隔离防找回码与验证码跨用途复用；登录态 `PATCH /auth/me/password` 凭原密码自助改密，补上此前**无任何改密入口**的缺口）
 - [x] 改密即失效旧令牌（会话失效）：`User.pwd_changed_at`（UTC、截断到整秒）记录最后改密时间，`iat` 早于它即判失效，访问令牌与刷新令牌一并拦截；`NULL` 视为从未改密，存量数据向后兼容无需刷数据
 - [x] init_db 演示密码回填仅限开发环境（`_backfill_demo_passwords` 仅在 `DEBUG=True` 生效；生产 `DEBUG=False` 跳过回填仅告警，绝不静默赋已知明文密码）
+- [x] 测试（pytest 全量 181 passed）
