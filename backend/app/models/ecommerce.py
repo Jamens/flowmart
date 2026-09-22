@@ -44,6 +44,11 @@ class User(TimestampMixin, Base):
     phone: Mapped[str] = mapped_column(String(20), nullable=False, default="")
     # 密码哈希，格式见 app/core/security.hash_password；留空表示尚未设置密码
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    # 最后一次改密时间（UTC、naive）：用于「改密后失效旧令牌」——签发时间早于该值的令牌一律判失效。
+    # 必须按 **UTC** 存：JWT 的 iat 是 Unix 时间戳（UTC 基准），若用本地时间存，
+    # 与 iat 比较会整体偏移，导致令牌要么全失效、要么永不失效。
+    # NULL = 从未改过密码，所有现存令牌保持有效（存量数据向后兼容，无需刷数据）。
+    pwd_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # 是否管理员：RBAC 角色闸门（require_admin）的依据。普通用户只能操作自己的资源，
     # 建账号 / 禁用用户 / 推进订单流转等管理操作仅管理员可执行。

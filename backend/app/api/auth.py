@@ -23,8 +23,10 @@ from app.core.security import (
     get_current_user,
     get_optional_current_user,
     hash_password,
+    password_changed_after_token,
     set_auth_cookie,
     set_refresh_cookie,
+    utcnow_naive,
     verify_password,
 )
 from app.core.verification import VerificationError, confirm_code, request_code
@@ -143,6 +145,9 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     user = db.get(User, uid)
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="用户不存在或已禁用")
+    # 刷新令牌同样受改密约束：否则改密后拿旧刷新令牌仍能无限续期，会话失效形同虚设
+    if password_changed_after_token(user, claims.get("iat")):
+        raise HTTPException(status_code=401, detail="密码已修改，请重新登录")
     new_access = create_access_token(user.id)
     set_auth_cookie(response, new_access)
     return {"access_token": new_access, "token_type": "bearer"}
@@ -311,6 +316,9 @@ def password_reset_confirm(payload: PasswordResetConfirmIn, db: Session = Depend
     except VerificationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     user.password_hash = hash_password(payload.new_password)
+    # 打改密时间戳：签发时间早于此刻的令牌（访问 + 刷新）全部失效，
+    # 否则持旧会话/旧刷新令牌的人仍能继续访问，找回密码就失去了意义。
+    user.pwd_changed_at = utcnow_naive()
     db.commit()
     return {"reset": True, "username": user.username}
 
@@ -340,5 +348,7 @@ def change_password(
         raise HTTPException(status_code=400, detail="原密码错误")
     login_limiter.reset(request, user.username)
     user.password_hash = hash_password(payload.new_password)
+    # 同 reset：改密作废此前签发的所有令牌
+    user.pwd_changed_at = utcnow_naive()
     db.commit()
     return {"changed": True}

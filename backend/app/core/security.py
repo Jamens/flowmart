@@ -16,6 +16,7 @@ import hmac
 import json
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request, Response
@@ -203,6 +204,32 @@ def clear_refresh_cookie(response: Response) -> None:
     )
 
 
+def utcnow_naive() -> datetime:
+    """当前 UTC 时间（naive，不带时区），**截断到整秒**。
+
+    两点都必须如此，否则与 JWT 的 iat 比较会出错：
+    1. 按 UTC 存：iat 是 int(time.time())（UTC 基准），用本地时间存会整体偏移。
+    2. 截断到整秒：iat 只有整秒精度。若 pwd_changed_at 带微秒，那么「改密之后、
+       同一秒内签发的新令牌」会因 iat(整秒) < pwd_ts(整秒+小数) 被误判失效，
+       把刚登录的用户踢下线。截断后同秒即视为有效，最多 1 秒宽限——
+       远好过误杀新令牌。
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def password_changed_after_token(user: User, iat: int | None) -> bool:
+    """令牌签发时间是否早于最后一次改密时间 —— 是则该令牌已因改密失效。
+
+    改密后旧令牌若继续有效，找回密码就失去意义：持有被盗会话的人不会被踢下线。
+    pwd_changed_at 为 NULL（从未改密）或令牌无 iat 时不判失效，保证存量数据向后兼容。
+    """
+    if iat is None or user.pwd_changed_at is None:
+        return False
+    # naive UTC 还原成 UTC 时区再取时间戳，与 iat（Unix 秒）同基准比较
+    pwd_ts = user.pwd_changed_at.replace(tzinfo=timezone.utc).timestamp()
+    return iat < pwd_ts
+
+
 def get_current_user(
     request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_BEARER),
@@ -230,6 +257,9 @@ def get_current_user(
     user = db.get(User, uid)
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="用户不存在或已禁用")
+    # 改密后旧令牌立即失效：否则找回密码踢不掉已泄露的会话
+    if password_changed_after_token(user, payload.get("iat")):
+        raise HTTPException(status_code=401, detail="密码已修改，请重新登录")
     return user
 
 
@@ -269,6 +299,9 @@ def get_optional_current_user(
     uid = int(payload["sub"])
     user = db.get(User, uid)
     if user is None or not user.is_active:
+        return None
+    # 与 get_current_user 一致：改密后的旧令牌视同未登录，走自助/重新登录路径
+    if password_changed_after_token(user, payload.get("iat")):
         return None
     return user
 

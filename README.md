@@ -155,7 +155,10 @@ python -m alembic downgrade -1
 - **找回密码（无需旧密码）**：`POST /auth/password/reset/send` 对**已验证**的邮箱/手机申请验证码，`POST /auth/password/reset/confirm` 凭码设置新密码。面向「忘记密码」以及生产环境被空密码告警拦住的账号——这类用户本来就登不进系统、拿不出旧密码，身份由「用户名 + 控制已验证联系方式（OTP 证明）」承担。
 - **投递地址取自库中已验证联系方式**，而非客户端随意填写的 `target`，避免钓鱼/误填；渠道未验证直接 `400`，不发码。
 - **与验证用 OTP 用途隔离**：`request_code` / `confirm_code` 新增 `purpose` 参数（默认 `verify`），找回码为 `purpose="reset"`，双方互不通用——找回码不能拿去当验证用，反之亦然（由 `tests/test_password_reset.py::test_reset_code_not_reusable_for_verify` 守住）。
-- **登录态自助改密**：`PATCH /auth/me/password` 需提供正确的原密码后才能改密，补上原先只有管理员能经 `users.update_user` 改密码的缺口——普通用户此前无法自助改密。
+- **登录态自助改密**：`PATCH /auth/me/password` 需提供正确的原密码后才能改密，补上此前**没有任何改密入口**的缺口（`users.update_user` 只允许改昵称/手机/启用状态，并不能改密码；管理员也改不了存量用户的密码）。
+- **改密即失效旧令牌（会话失效）**：`User.pwd_changed_at` 记录最后一次改密时间，令牌签发时间 `iat` 早于该值即判失效——访问令牌在 `get_current_user` 拦截、刷新令牌在 `/auth/refresh` 拦截。否则改密/找回踢不掉已泄露的会话（刷新令牌存活 7 天、可无限续期），重置就失去意义。
+  - `pwd_changed_at` 为 `NULL`（从未改密）时令牌保持有效，存量数据无需刷数据，向后兼容。
+  - 该时间**必须按 UTC 存且截断到整秒**：`iat` 是 `int(time.time())`（UTC 基准、整秒精度），用本地时间存会整体偏移；若带微秒，「改密后同一秒内签发的新令牌」会因 `iat < pwd_ts` 被误杀，把刚登录的用户踢下线。
 
 ### REST API
 
@@ -331,7 +334,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 164 passed）
+- [x] 测试（pytest 全量 169 passed）
 
 ### ❌ 待实现
 
@@ -346,5 +349,6 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
 - [x] 邮箱 / 手机验证（两步式 OTP：send/confirm；可插拔发送器；DB 重发限流；开发回传 dev_code；**下单与登录均加 403 强约束闸门**；验证入口支持未登录凭账号密码自助验证，避免死锁）
-- [x] 找回密码与改密码（reset 两步式：已验证邮箱/手机收码 → 凭码重置，**无需旧密码**；投递地址取库中已验证联系方式；`purpose` 隔离防找回码与验证码跨用途复用；登录态 `PATCH /auth/me/password` 凭原密码自助改密，补上原先仅管理员可改密的缺口）
+- [x] 找回密码与改密码（reset 两步式：已验证邮箱/手机收码 → 凭码重置，**无需旧密码**；投递地址取库中已验证联系方式；`purpose` 隔离防找回码与验证码跨用途复用；登录态 `PATCH /auth/me/password` 凭原密码自助改密，补上此前**无任何改密入口**的缺口）
+- [x] 改密即失效旧令牌（会话失效）：`User.pwd_changed_at`（UTC、截断到整秒）记录最后改密时间，`iat` 早于它即判失效，访问令牌与刷新令牌一并拦截；`NULL` 视为从未改密，存量数据向后兼容无需刷数据
 - [x] init_db 演示密码回填仅限开发环境（`_backfill_demo_passwords` 仅在 `DEBUG=True` 生效；生产 `DEBUG=False` 跳过回填仅告警，绝不静默赋已知明文密码）
