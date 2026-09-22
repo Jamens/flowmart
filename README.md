@@ -164,6 +164,7 @@ python -m alembic downgrade -1
   - 已用过的令牌再次出现即判**重放**（多半已泄露），撤销同一 family 的全部令牌，强制重新登录。
   - 登出同样在服务端撤销整条链：只清 Cookie 的话，泄露出去的令牌 7 天内仍可换发访问令牌。
   - 每次登录是一条独立 family，多设备 / 多浏览器并存、互不影响。
+  - **定期清理**：轮转只增不减，由 `scripts/cleanup_refresh_tokens.py` 清理（建议每天一次 cron）。它**只删两类安全行**——已过期（`expires_at` 已过）和已撤销且超过保留期（默认 30 天）的；**「已轮换但尚未过期」的行必须保留**，否则重放检测会退化：虽然同样返回 401，却拿不到「撤销整条 family」这一更强的处置。
 
 ### REST API
 
@@ -258,6 +259,20 @@ Vue 3 + Vite 6 + Element Plus，暗色主题。
 | `backend/scripts/export_schema.py` | 导出表结构 Markdown |
 | `backend/scripts/export_schema_html.py` | 生成表结构可视化页面 `docs/schema-viewer.html` |
 | `backend/scripts/export_data_html.py` | 生成数据浏览器页面 `docs/data-viewer.html` |
+| `backend/scripts/cleanup_refresh_tokens.py` | 清理 `refresh_tokens` 死记录（**已过期** + **已撤销超保留期**），支持 `--dry-run`、`--revoked-retention-days`（默认 30）；供 cron / 计划任务每天执行 |
+
+定期清理示例（`/auth/refresh` 会持续新增行，必须定期回收）：
+
+```bash
+# 先看看会删多少（不真删）
+python backend/scripts/cleanup_refresh_tokens.py --dry-run
+
+# Linux cron：每天凌晨 3 点
+0 3 * * * cd /path/to/flowmart/backend && python scripts/cleanup_refresh_tokens.py >> /var/log/flowmart-cleanup.log 2>&1
+```
+
+> Windows 可用「任务计划程序」按同样命令建每日任务；容器内可用 Kubernetes CronJob / supervisord。
+> 未接任何后台调度依赖——本项目坚持无第三方调度组件（连 JWT 与 PBKDF2 都是标准库实现）。
 
 ## 内置演示流程
 
@@ -340,7 +355,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 175 passed）
+- [x] 测试（pytest 全量 181 passed）
 
 ### ❌ 待实现
 
@@ -352,6 +367,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 流程定义版本管理（同 code 多版本；POST .../versions 派生新草案克隆图、GET .../code/{code}/versions 版本历史；发布保证唯一 published 并自动降级旧版本；回滚=重新发布旧版本）
 - [x] JWT 刷新 / 续期机制（短期访问令牌 30 分钟 + 长期刷新令牌 7 天写独立 httpOnly Cookie；POST /auth/refresh 静默换发访问令牌；前端 401 自动刷新并重试一次；access/refresh 令牌 type 隔离防混用）
 - [x] 刷新令牌轮转（rotation）+ 重放检测（每条刷新令牌在 `refresh_tokens` 表留痕：用过后置 `used_at`，再次出现即判重放并撤销同一 family 整条轮转链；登出在服务端撤销、不只清 Cookie；多设备各是一条独立 family 互不影响）
+- [x] 刷新令牌定期清理（`scripts/cleanup_refresh_tokens.py`：只删「已过期」与「已撤销超保留期」两类安全行，**保留已轮换但未过期的行**以免重放检测退化；`--dry-run` 可预演，无第三方调度依赖，挂 cron 即可）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）
