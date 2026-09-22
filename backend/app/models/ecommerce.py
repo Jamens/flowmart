@@ -245,3 +245,34 @@ class VerificationCode(TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     user: Mapped["User"] = relationship("User")
+
+
+class RefreshToken(TimestampMixin, Base):
+    """刷新令牌记录：支撑「轮转（rotation）+ 重放检测」。
+
+    为什么必须有服务端状态：无状态时做「伪轮转」——每次换发新码，但旧码在 7 天有效期内
+    依旧可用——并不能阻止泄露的刷新令牌被无限重放，反而制造安全假象。
+    这里把每个刷新令牌落到库里：用过后置 used_at，若它再次出现即判定为**重放**，
+    撤销同一 family（同一次登录会话派生出的所有令牌）并要求重新登录。
+
+    family 的意义：同一 family 内的令牌是一条轮转链（登录 → 刷新 → 刷新 …），
+    不同 family 互不影响，因此多设备/多浏览器可并存，各自独立轮转。
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False, index=True
+    )
+    # JWT 里的 jti 声明，唯一标识这一条刷新令牌
+    jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    # 轮转链标识：一次登录派生出的所有令牌同族；重放时整族撤销
+    family_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # 已被轮转（换发过新码）；再次出现即为重放
+    used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # 主动撤销（登出 / 重放触发的整族撤销）
+    revoked_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship("User")

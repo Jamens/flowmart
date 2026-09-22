@@ -89,11 +89,20 @@ def decode_access_token(token: str) -> dict:
     return payload
 
 
-def create_refresh_token(sub: int | str) -> str:
-    """签发 HS256 刷新令牌：长期有效、type=refresh，仅用于 /auth/refresh 换发访问令牌。"""
+def create_refresh_token(sub: int | str, jti: str | None = None, family: str | None = None) -> str:
+    """签发 HS256 刷新令牌：长期有效、type=refresh，仅用于 /auth/refresh 换发访问令牌。
+
+    jti / family 用于轮转与重放检测（见 models.ecommerce.RefreshToken）：带上它们后
+    该令牌在库里有对应记录，用过后即失效、再次出现判定为重放。不带则退化为无状态令牌
+    （保持向后兼容，仅供测试等场景使用）。
+    """
     now = int(time.time())
     exp = now + settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
     payload = {"sub": str(sub), "iat": now, "exp": exp, "type": "refresh"}
+    if jti:
+        payload["jti"] = jti
+    if family:
+        payload["fam"] = family
     h = _b64u(json.dumps({"alg": ALG, "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
     p = _b64u(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     sig = hmac.new(settings.SECRET_KEY.encode("utf-8"), f"{h}.{p}".encode("utf-8"), hashlib.sha256).digest()

@@ -159,6 +159,11 @@ python -m alembic downgrade -1
 - **改密即失效旧令牌（会话失效）**：`User.pwd_changed_at` 记录最后一次改密时间，令牌签发时间 `iat` 早于该值即判失效——访问令牌在 `get_current_user` 拦截、刷新令牌在 `/auth/refresh` 拦截。否则改密/找回踢不掉已泄露的会话（刷新令牌存活 7 天、可无限续期），重置就失去意义。
   - `pwd_changed_at` 为 `NULL`（从未改密）时令牌保持有效，存量数据无需刷数据，向后兼容。
   - 该时间**必须按 UTC 存且截断到整秒**：`iat` 是 `int(time.time())`（UTC 基准、整秒精度），用本地时间存会整体偏移；若带微秒，「改密后同一秒内签发的新令牌」会因 `iat < pwd_ts` 被误杀，把刚登录的用户踢下线。
+- **刷新令牌轮转（rotation）+ 重放检测**：每次 `/auth/refresh` 都作废旧刷新令牌、在同一 `family` 链上签发新的一条，因此泄露的令牌**最多只能被用一次**。
+  - 轮转**必须有服务端状态**（`refresh_tokens` 表）才有意义：无状态时换发新码而旧码在有效期内依旧可用，那只是「安全假象」，挡不住无限重放——这正是此前代码注释里写明「不做伪轮转」的原因。
+  - 已用过的令牌再次出现即判**重放**（多半已泄露），撤销同一 family 的全部令牌，强制重新登录。
+  - 登出同样在服务端撤销整条链：只清 Cookie 的话，泄露出去的令牌 7 天内仍可换发访问令牌。
+  - 每次登录是一条独立 family，多设备 / 多浏览器并存、互不影响。
 
 ### REST API
 
@@ -167,7 +172,8 @@ python -m alembic downgrade -1
 | POST | `/api/v1/auth/register` | 注册（直接返回 token） |
 | POST | `/api/v1/auth/login` | 登录换取 JWT（**未验证邮箱/手机返回 403**） |
 | GET | `/api/v1/auth/me` | 当前登录用户（含 email / email_verified / phone_verified） |
-| POST | `/api/v1/auth/logout` | 退出登录（清除 httpOnly Cookie） |
+| POST | `/api/v1/auth/logout` | 退出登录（清除 httpOnly Cookie **并在服务端撤销该登录会话的刷新令牌**） |
+| POST | `/api/v1/auth/refresh` | 用刷新令牌换发访问令牌（**轮转**：旧刷新令牌随即失效，响应回传新刷新令牌） |
 | POST | `/api/v1/auth/verification/send` | 申请邮箱/手机验证码（开发环境回传 dev_code；**支持登录前凭账号密码自证身份**） |
 | POST | `/api/v1/auth/verification/confirm` | 确认验证码并标记对应渠道已验证（**未登录凭账号密码自证亦可**） |
 | POST | `/api/v1/auth/password/reset/send` | 申请找回密码验证码（**无需旧密码**；发往已验证邮箱/手机） |
@@ -334,7 +340,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
 - [x] 工具脚本（init_db / seed / export_schema / export_data_html）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
-- [x] 测试（pytest 全量 169 passed）
+- [x] 测试（pytest 全量 175 passed）
 
 ### ❌ 待实现
 
@@ -345,6 +351,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] Alembic 迁移脚本（初始迁移已生成并与模型一致；`alembic upgrade head` / `downgrade base`；`tests/test_migrations.py` 守住「改模型忘写迁移」）
 - [x] 流程定义版本管理（同 code 多版本；POST .../versions 派生新草案克隆图、GET .../code/{code}/versions 版本历史；发布保证唯一 published 并自动降级旧版本；回滚=重新发布旧版本）
 - [x] JWT 刷新 / 续期机制（短期访问令牌 30 分钟 + 长期刷新令牌 7 天写独立 httpOnly Cookie；POST /auth/refresh 静默换发访问令牌；前端 401 自动刷新并重试一次；access/refresh 令牌 type 隔离防混用）
+- [x] 刷新令牌轮转（rotation）+ 重放检测（每条刷新令牌在 `refresh_tokens` 表留痕：用过后置 `used_at`，再次出现即判重放并撤销同一 family 整条轮转链；登出在服务端撤销、不只清 Cookie；多设备各是一条独立 family 互不影响）
 - [x] 列表接口分页（orders / products / users 统一返回 `{items, total}` 信封；`limit=0` 表示不分页返回全部，保证 SKU 下拉框全量不被截断；total 用子查询统计；前端 OrdersView/ProductsView/UsersView 均加 `el-pagination`）
 - [x] 登录限流（POST /auth/login 按 (IP, 用户名) 固定窗口计数失败次数，超阈值返 429 + Retry-After；成功清空计数；单实例内存级，生产换 Redis）
 - [x] 订单搜索 / 筛选增强（列表支持关键词：订单号 + 商品行项名称 LIKE；下单时间范围 `created_from`/`created_to` 闭区间；非法日期 400；与 status/分页共用同一过滤条件统计 total）

@@ -4,11 +4,14 @@
 浏览器同源请求由 Cookie 携带令牌，前端不再用 localStorage 存明文令牌（抗 XSS 窃取）。
 所有资源接口通过 Depends(get_current_user) 解析出当前用户，不再信任请求体里的 user_id。
 """
+import secrets
+from datetime import timedelta
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
-from typing import Literal
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -19,6 +22,7 @@ from app.core.security import (
     clear_refresh_cookie,
     create_access_token,
     create_refresh_token,
+    decode_access_token,
     decode_refresh_token,
     get_current_user,
     get_optional_current_user,
@@ -30,9 +34,71 @@ from app.core.security import (
     verify_password,
 )
 from app.core.verification import VerificationError, confirm_code, request_code
-from app.models.ecommerce import User
+from app.models.ecommerce import RefreshToken, User
 
 router = APIRouter(prefix="/auth", tags=["认证"])
+
+
+def _new_token_id() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def _issue_refresh(db: Session, user: User, response: Response, family: str | None = None) -> tuple[str, str]:
+    """签发一条**被记录**的刷新令牌并写入 Cookie，返回 (token, family_id)。
+
+    每条刷新令牌都要在 refresh_tokens 表里留一行，这是轮转与重放检测的前提：
+    没有服务端状态的「伪轮转」挡不住泄露令牌被无限重放。
+    """
+    # 顺带清掉该用户已过期的记录：轮转会持续新增行，过期行已不可能被接受，
+    # 不清会无限增长（每条登录/每次刷新各一行）。
+    db.execute(
+        delete(RefreshToken).where(
+            RefreshToken.user_id == user.id,
+            RefreshToken.expires_at < utcnow_naive(),
+        )
+    )
+    jti = _new_token_id()
+    fam = family or _new_token_id()
+    token = create_refresh_token(user.id, jti=jti, family=fam)
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            jti=jti,
+            family_id=fam,
+            expires_at=utcnow_naive() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        )
+    )
+    db.flush()
+    set_refresh_cookie(response, token)
+    return token, fam
+
+
+def _revoke_user_refresh(db: Session, user_id: int) -> None:
+    """撤销该用户的全部刷新令牌（登出时拿不到刷新令牌、只有访问令牌时的兜底）。"""
+    now = utcnow_naive()
+    rows = db.execute(
+        select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+    ).scalars().all()
+    for r in rows:
+        r.revoked_at = now
+    db.flush()
+
+
+def _revoke_family(db: Session, family_id: str) -> None:
+    """撤销同一条轮转链上的所有刷新令牌（登出，或检测到重放时）。"""
+    now = utcnow_naive()
+    rows = db.execute(
+        select(RefreshToken).where(
+            RefreshToken.family_id == family_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+    ).scalars().all()
+    for r in rows:
+        r.revoked_at = now
+    db.flush()
 
 
 class RegisterIn(BaseModel):
@@ -63,9 +129,9 @@ def register(payload: RegisterIn, response: Response, db: Session = Depends(get_
     db.commit()
     db.refresh(user)
     token = create_access_token(user.id)
-    refresh = create_refresh_token(user.id)
+    refresh, _family = _issue_refresh(db, user, response)
     set_auth_cookie(response, token)
-    set_refresh_cookie(response, refresh)
+    db.commit()
     return {
         "id": user.id,
         "username": user.username,
@@ -105,9 +171,9 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     # 登录成功清空失败计数，避免正常用户刚改完密码就被旧失败数误伤
     login_limiter.reset(request, payload.username)
     token = create_access_token(user.id)
-    refresh = create_refresh_token(user.id)
+    refresh, _family = _issue_refresh(db, user, response)
     set_auth_cookie(response, token)
-    set_refresh_cookie(response, refresh)
+    db.commit()
     return {
         "access_token": token,
         "refresh_token": refresh,
@@ -116,19 +182,50 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     }
 
 
-@router.post("/logout", summary="退出登录（清除 httpOnly Cookie）")
-def logout(response: Response):
+@router.post("/logout", summary="退出登录（清除 Cookie 并撤销刷新令牌）")
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
     # 前端 JS 无法删除 httpOnly Cookie，必须由后端发删除指令；访问 + 刷新令牌一并清除
     clear_auth_cookie(response)
     clear_refresh_cookie(response)
+    # 服务端撤销该登录会话的整条轮转链：只清 Cookie 是不够的——
+    # 已经泄露出去的刷新令牌在 7 天有效期内仍可换发访问令牌。
+    token = request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+    if token:
+        try:
+            jti = decode_refresh_token(token).get("jti")
+            if jti:
+                row = db.scalar(select(RefreshToken).where(RefreshToken.jti == jti))
+                if row is not None:
+                    _revoke_family(db, row.family_id)
+                    db.commit()
+        except (JWTError, ValueError, KeyError):
+            # 带的是访问令牌（API 客户端的常见写法）：无法定位到某条 family，
+            # 退而撤销该用户全部刷新令牌。否则「登出」在服务端形同没做，
+            # 泄露出去的令牌仍可续期。
+            try:
+                _revoke_user_refresh(db, int(decode_access_token(token)["sub"]))
+                db.commit()
+            except (JWTError, ValueError, KeyError, TypeError):
+                pass  # 令牌本身已无效：清掉 Cookie 就够了，不必报错
     return {"detail": "已退出登录"}
 
 
-@router.post("/refresh", summary="用刷新令牌换发访问令牌（静默续期）")
+@router.post("/refresh", summary="用刷新令牌换发访问令牌（轮转：旧刷新令牌随即失效）")
 def refresh(request: Request, response: Response, db: Session = Depends(get_db)):
     """访问令牌过期时由前端静默调用：读刷新令牌（浏览器走 httpOnly Cookie，API 客户端走 Bearer 头），
-    校验通过后换发新访问令牌并刷新访问 Cookie。不轮转刷新令牌——无服务端状态时的伪轮转反而更危险，
-    刷新令牌的长期有效性由 SameSite Cookie + httpOnly 共同保护。"""
+    校验通过后换发新访问令牌，**并轮转刷新令牌**。
+
+    轮转（rotation）：每次刷新都作废旧刷新令牌、在同一 family 链上签发新的一条。
+    于是泄露的刷新令牌最多只能被用一次——合法用户下一次刷新后它就失效了。
+    若已用过的令牌再次出现（重放），判定为泄露，撤销整条 family 强制重新登录。
+
+    注意轮换必须有服务端状态（refresh_tokens 表）才有意义：无状态时换发新码
+    而旧码在有效期内依旧可用，那只是「安全假象」，挡不住无限重放。
+    """
     token = request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
     # API 客户端（非浏览器）可把刷新令牌放在 Bearer 头；浏览器用不到
     if not token:
@@ -148,9 +245,46 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     # 刷新令牌同样受改密约束：否则改密后拿旧刷新令牌仍能无限续期，会话失效形同虚设
     if password_changed_after_token(user, claims.get("iat")):
         raise HTTPException(status_code=401, detail="密码已修改，请重新登录")
+
+    # 轮转 / 重放检测：令牌必须在库里，且尚未被用过、未被撤销、未过期。
+    # 这里用**一条条件 UPDATE** 而不是「先查再改」：并发下两个请求同时读到
+    # used_at IS NULL 会各自轮转成功、谁都不触发重放检测，攻击者就能无限续期
+    # —— 正是本功能要防的场景。条件更新由数据库保证原子性。
+    jti = claims.get("jti")
+    row = db.scalar(select(RefreshToken).where(RefreshToken.jti == jti)) if jti else None
+    if row is None:
+        raise HTTPException(status_code=401, detail="刷新令牌无效或已被撤销")
+
+    now = utcnow_naive()
+    claimed = db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.id == row.id,
+            RefreshToken.user_id == uid,
+            RefreshToken.used_at.is_(None),
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > now,
+        )
+        .values(used_at=now)
+    )
+    if claimed.rowcount != 1:
+        # 已用过 / 已撤销 / 已过期 = 重放（多半已泄露）：撤销整条轮转链
+        _revoke_family(db, row.family_id)
+        db.commit()
+        raise HTTPException(
+            status_code=401, detail="刷新令牌已被使用或已撤销，登录会话已失效，请重新登录"
+        )
+
+    new_refresh, _family = _issue_refresh(db, user, response, family=row.family_id)
     new_access = create_access_token(user.id)
     set_auth_cookie(response, new_access)
-    return {"access_token": new_access, "token_type": "bearer"}
+    db.commit()
+    return {
+        "access_token": new_access,
+        # API 客户端不走 Cookie，必须把轮转后的新刷新令牌交回它保存
+        "refresh_token": new_refresh,
+        "token_type": "bearer",
+    }
 
 
 @router.get("/me", summary="当前登录用户")
