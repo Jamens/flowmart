@@ -14,7 +14,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.core.database import Base  # noqa: E402
-from app.core.security import get_current_user, hash_password  # noqa: E402
+from app.core.security import get_current_user, get_optional_current_user, hash_password  # noqa: E402
 from app.models import ecommerce, workflow  # noqa: F401,E402
 from app.models.ecommerce import User  # noqa: E402
 from app.services.workflow_engine import WorkflowEngine  # noqa: E402
@@ -69,6 +69,9 @@ def client(db, order_flow, current_user):
     state = {"user": current_user}
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: state["user"]
+    # OTP 自验证接口改用 get_optional_current_user：已登录会话也必须被识别为「已登录」，
+    # 否则依赖覆盖只认 get_current_user 时，这些接口会拿到 None 而误判为未登录。
+    app.dependency_overrides[get_optional_current_user] = lambda: state["user"]
     with TestClient(app) as c:
         c.user = current_user
         c.as_user = lambda u: state.__setitem__("user", u)
@@ -114,6 +117,7 @@ def buyer_client(db, order_flow, buyer_user):
     state = {"user": buyer_user}
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: state["user"]
+    app.dependency_overrides[get_optional_current_user] = lambda: state["user"]
     with TestClient(app) as c:
         c.user = buyer_user
         yield c

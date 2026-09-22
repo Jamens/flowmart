@@ -4,8 +4,21 @@
 - 登录/注册写入 httpOnly Cookie（XSS 读不到），且令牌也可经 Cookie 回读认证；
 - CORS 仅放行配置中的已知前端源，不再 `*`。
 """
+def _verify(raw_client, token, target="verified@example.com", channel="email"):
+    h = {"Authorization": f"Bearer {token}"}
+    code = raw_client.post(
+        "/api/v1/auth/verification/send", headers=h, json={"channel": channel, "target": target}
+    ).json()["dev_code"]
+    r = raw_client.post(
+        "/api/v1/auth/verification/confirm", headers=h,
+        json={"channel": channel, "target": target, "code": code},
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_login_sets_httponly_cookie(raw_client):
-    raw_client.post("/api/v1/auth/register", json={"username": "cookieuser", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "cookieuser", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"])
     r = raw_client.post("/api/v1/auth/login", json={"username": "cookieuser", "password": "secret1"})
     assert r.status_code == 200
     sc = r.headers.get("set-cookie", "")
@@ -15,7 +28,8 @@ def test_login_sets_httponly_cookie(raw_client):
 
 
 def test_request_via_cookie_authenticates(raw_client):
-    raw_client.post("/api/v1/auth/register", json={"username": "cookieuser2", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "cookieuser2", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"], "c2@example.com")
     login = raw_client.post(
         "/api/v1/auth/login", json={"username": "cookieuser2", "password": "secret1"}
     ).json()
@@ -45,7 +59,8 @@ def test_cors_rejects_unknown_origin(raw_client):
 
 
 def test_logout_clears_cookie(raw_client):
-    raw_client.post("/api/v1/auth/register", json={"username": "logoutuser", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "logoutuser", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"], "lo@example.com")
     raw_client.post("/api/v1/auth/login", json={"username": "logoutuser", "password": "secret1"})
     r = raw_client.post("/api/v1/auth/logout")
     assert r.status_code == 200
@@ -61,7 +76,8 @@ def test_logout_clears_cookie(raw_client):
 def test_login_sets_secure_cookie_in_prod(raw_client, monkeypatch):
     # 生产环境 COOKIE_SECURE=True：浏览器只有 HTTPS 才接受该 Cookie，明文 HTTP 下不发送
     monkeypatch.setattr("app.core.security.settings.COOKIE_SECURE", True)
-    raw_client.post("/api/v1/auth/register", json={"username": "secureuser", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "secureuser", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"], "su@example.com")
     r = raw_client.post("/api/v1/auth/login", json={"username": "secureuser", "password": "secret1"})
     sc = r.headers.get("set-cookie", "")
     assert "Secure" in sc  # 生产必须带 Secure
@@ -70,7 +86,8 @@ def test_login_sets_secure_cookie_in_prod(raw_client, monkeypatch):
 
 def test_bearer_header_takes_precedence_over_cookie(raw_client):
     # 同时带有效 Bearer 头与伪造 Cookie，应以 Bearer 头身份为准，杜绝 Cookie 混淆/冒充
-    raw_client.post("/api/v1/auth/register", json={"username": "precedence", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "precedence", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"], "pc@example.com")
     token = (
         raw_client.post("/api/v1/auth/login", json={"username": "precedence", "password": "secret1"})
         .json()["access_token"]

@@ -195,6 +195,8 @@ def seed_users(db) -> tuple[int, int, int]:
             db.flush()
         # 由配置 BOOTSTRAP_ADMIN 指定初始管理员（RBAC），其余为普通买家
         user.is_admin = username == settings.BOOTSTRAP_ADMIN
+        # 演示账号直接置为已验证，否则登录验证闸门会锁死演示登录（生产环境真实用户需走 OTP 自助验证）
+        user.email_verified = True
         users[username] = user.id
 
     addr_id = None

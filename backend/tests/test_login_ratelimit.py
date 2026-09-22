@@ -29,6 +29,20 @@ def _register(raw_client, username, password="secret1"):
     raw_client.post("/api/v1/auth/register", json={"username": username, "password": password})
 
 
+def _verify(raw_client, token, target="verified@example.com", channel="email"):
+    """测试夹具：用令牌走 OTP 验证，便于后续登录通过登录验证闸门。"""
+    h = {"Authorization": f"Bearer {token}"}
+    code = raw_client.post(
+        "/api/v1/auth/verification/send", headers=h,
+        json={"channel": channel, "target": target}
+    ).json()["dev_code"]
+    r = raw_client.post(
+        "/api/v1/auth/verification/confirm", headers=h,
+        json={"channel": channel, "target": target, "code": code},
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_rate_limit_blocks_after_threshold(raw_client):
     """同一 (IP, 用户名) 失败达阈值 → 429 且带 Retry-After。"""
     _register(raw_client, "rl_victim")
@@ -49,7 +63,8 @@ def test_rate_limit_blocks_after_threshold(raw_client):
 
 def test_successful_login_resets_failures(raw_client):
     """登录成功清空失败计数，正常用户不会被旧失败数误伤。"""
-    _register(raw_client, "rl_reset")
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "rl_reset", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"])
     # 失败到阈值差一次（未达限流）
     for _ in range(settings.LOGIN_RATE_LIMIT_MAX - 1):
         r = raw_client.post(
@@ -71,7 +86,8 @@ def test_successful_login_resets_failures(raw_client):
 def test_distinct_ip_independent(raw_client, monkeypatch):
     """限流键含 IP：同一用户名从不同 IP 登录互不干扰（需开启 TRUST_PROXY 才信 XFF）。"""
     monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_TRUST_PROXY", True)
-    _register(raw_client, "rl_ip")
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "rl_ip", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"])
     # 从 IP 1.1.1.1 打满失败
     for _ in range(settings.LOGIN_RATE_LIMIT_MAX):
         raw_client.post(
@@ -92,7 +108,8 @@ def test_window_expiry_recovers(raw_client, monkeypatch):
     """窗口过期后限流解除，可再次登录（用假时钟避免真实 sleep 60s）。"""
     clock = {"t": 1000.0}
     monkeypatch.setattr("app.core.ratelimit.time.monotonic", lambda: clock["t"])
-    _register(raw_client, "rl_expire")
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "rl_expire", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"])
     # 窗口内打满 → 被限流
     for _ in range(settings.LOGIN_RATE_LIMIT_MAX):
         raw_client.post(
@@ -170,7 +187,8 @@ def test_limiter_redis_backend_end_to_end(raw_client, monkeypatch):
 
     rl_mod.login_limiter = LoginRateLimiter()
     try:
-        _register(raw_client, "rl_redis")
+        reg = raw_client.post("/api/v1/auth/register", json={"username": "rl_redis", "password": "secret1"}).json()
+        _verify(raw_client, reg["access_token"])
         # 失败到「差一次阈值」（尚未被限流），验证 Redis 后端计数生效
         for _ in range(settings.LOGIN_RATE_LIMIT_MAX - 1):
             assert (

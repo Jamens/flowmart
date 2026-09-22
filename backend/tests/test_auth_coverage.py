@@ -27,6 +27,10 @@ PUBLIC = {f"{API}/auth/login", f"{API}/auth/register", f"{API}/auth/logout"}
 # 刷新端点用「刷新令牌」鉴权（非访问令牌），故不挂 get_current_user；
 # 单独列出以免被下方覆盖测试误判为漏鉴权（其鉴权由 decode_refresh_token 完成）
 REFRESH_AUTH = {f"{API}/auth/refresh"}
+# 验证码申请/确认是「未验证用户自助验证」的入口，必须允许未登录访问（否则未验证用户
+# 会卡死在登录闸门之外永远无法验证）。它们用 get_optional_current_user 解析身份，
+# 已登录走令牌、未登录凭账号密码自证，故不要求 get_current_user，单独列出。
+SELF_SERVICE = {f"{API}/auth/verification/send", f"{API}/auth/verification/confirm"}
 
 MODULES = [auth, products, categories, cart, users, orders, workflows, admin_db]
 
@@ -67,7 +71,7 @@ def test_every_endpoint_requires_auth():
     missing = [
         f"{m} {path}"
         for m, path, found in _all_endpoints()
-        if path not in PUBLIC and path not in REFRESH_AUTH and not found
+        if path not in PUBLIC and path not in REFRESH_AUTH and path not in SELF_SERVICE and not found
     ]
     assert not missing, (
         "以下端点没有挂任何鉴权依赖（应加 get_current_user 或 require_admin）："

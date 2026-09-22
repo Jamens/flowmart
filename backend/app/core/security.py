@@ -245,6 +245,34 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+def get_optional_current_user(
+    request: Request,
+    creds: HTTPAuthorizationCredentials | None = Depends(_BEARER),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """与 get_current_user 类似，但解析失败（无令牌/失效/禁用）时返回 None 而非 401。
+
+    用于「未登录也可用」的接口（如下述验证接口允许凭账号密码自证身份），
+    让未验证用户也能自助完成验证，避免被登录闸门锁死。
+    """
+    token = None
+    if creds is not None and creds.scheme.lower() == "bearer":
+        token = creds.credentials
+    else:
+        token = request.cookies.get(settings.JWT_COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token)
+    except JWTError:
+        return None
+    uid = int(payload["sub"])
+    user = db.get(User, uid)
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
 def require_verified_contact(current_user: User = Depends(get_current_user)) -> User:
     """下单强约束闸门：当前用户须至少验证一种联系方式（邮箱或手机），否则 403。
 

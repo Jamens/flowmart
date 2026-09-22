@@ -127,18 +127,33 @@ def test_confirm_exceeds_attempts_locks_code(client):
 
 
 def test_register_with_email(raw_client):
-    """注册带 email：落库后登录用真实 Bearer 令牌取 /me，应回显邮箱且未验证。
+    """注册带 email：落库后经 OTP 验证，登录取 /me 应回显邮箱且已验证。
 
-    注意必须用 raw_client（真实鉴权链路），不能用品客的 client——后者把 get_current_user
-    覆写成固定夹具用户，Bearer 令牌会被忽略，/me 永远返回夹具用户而非刚注册的用户。
+    注意：登录验证闸门要求已验证才能登录（未验证用户无法登录），故这里走完 OTP
+    验证流程再登录。必须用 raw_client（真实鉴权链路），不能用品客的 client——
+    后者把 get_current_user 覆写成固定夹具用户，Bearer 令牌会被忽略。
     """
     r = raw_client.post(
         f"{AUTH}/register",
         json={"username": "emailreg", "password": "123456", "email": "reg@example.com"},
     )
     assert r.status_code == 201, r.text
+    token = r.json()["access_token"]
+    # OTP 验证邮箱
+    code = raw_client.post(
+        f"{AUTH}/verification/send",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"channel": "email", "target": "reg@example.com"},
+    ).json()["dev_code"]
+    c = raw_client.post(
+        f"{AUTH}/verification/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"channel": "email", "target": "reg@example.com", "code": code},
+    )
+    assert c.status_code == 200, c.text
+    # 验证后再登录取 /me
     me = raw_client.post(f"{AUTH}/login", json={"username": "emailreg", "password": "123456"})
-    token = me.json()["access_token"]
-    profile = raw_client.get(f"{AUTH}/me", headers={"Authorization": f"Bearer {token}"}).json()
+    token2 = me.json()["access_token"]
+    profile = raw_client.get(f"{AUTH}/me", headers={"Authorization": f"Bearer {token2}"}).json()
     assert profile["email"] == "reg@example.com"
-    assert profile["email_verified"] is False
+    assert profile["email_verified"] is True

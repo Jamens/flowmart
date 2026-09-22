@@ -21,6 +21,7 @@ from app.core.security import (
     create_refresh_token,
     decode_refresh_token,
     get_current_user,
+    get_optional_current_user,
     hash_password,
     set_auth_cookie,
     set_refresh_cookie,
@@ -91,6 +92,14 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
         # 禁用账号不计失败次数：它本就不是「猜密码」，反复计数只会白白占窗口，
         # 但仍拒绝登录。注意这里不 reset——禁用状态与爆破无关。
         raise HTTPException(status_code=401, detail="该用户已被禁用")
+    # 验证闸门：未验证邮箱或手机不允许登录（防止匿名/未验证账号进入系统）。
+    # 未验证用户可通过 /auth/verification/send + /confirm 自助验证（支持凭账号密码自证身份，
+    # 无需先登录），验证后再登录即可，因此不会被永久锁死。
+    if not (user.email_verified or user.phone_verified):
+        raise HTTPException(
+            status_code=403,
+            detail="该账号尚未验证邮箱或手机，请先完成验证后再登录",
+        )
     # 登录成功清空失败计数，避免正常用户刚改完密码就被旧失败数误伤
     login_limiter.reset(request, payload.username)
     token = create_access_token(user.id)
@@ -156,24 +165,51 @@ def me(user: User = Depends(get_current_user)):
 class VerificationSendIn(BaseModel):
     channel: Literal["email", "phone"]
     target: str = Field(..., min_length=1, max_length=255)
+    # 未登录自助验证：未验证用户无法调用需令牌的接口，可用账号密码自证身份来申请验证码
+    username: str | None = None
+    password: str | None = None
 
 
 class VerificationConfirmIn(BaseModel):
     channel: Literal["email", "phone"]
     target: str = Field(..., min_length=1, max_length=255)
     code: str = Field(..., min_length=1, max_length=16)
+    # 未登录自助验证：同上，确认时也用账号密码自证身份
+    username: str | None = None
+    password: str | None = None
+
+
+def _resolve_verification_user(payload, token_user: User | None, db: Session) -> User:
+    """解析要验证的用户：已登录优先用令牌；未登录必须凭账号密码自证身份。
+
+    否则未验证用户会陷入死锁：验证接口要令牌 -> 没登录拿不到令牌 -> 被登录闸门挡住永远无法验证。
+    """
+    if token_user is not None:
+        return token_user
+    if payload.username and payload.password:
+        u = db.scalar(select(User).where(User.username == payload.username))
+        if u is None or not verify_password(payload.password, u.password_hash):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        if not u.is_active:
+            raise HTTPException(status_code=401, detail="该用户已被禁用")
+        return u
+    raise HTTPException(status_code=401, detail="请先登录或提供账号密码以自助验证")
 
 
 @router.post("/verification/send", summary="申请邮箱/手机验证码")
 def send_verification(
     payload: VerificationSendIn,
-    user: User = Depends(get_current_user),
+    user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     """申请一次性验证码。开发环境（OTP_DEV_RETURN_CODE=True）会在响应里回传 dev_code 便于联调，
-    生产必须关掉该开关（配置校验会强制）。"""
+    生产必须关掉该开关（配置校验会强制）。
+
+    身份解析：已登录用令牌；未登录凭账号密码自证（详见 _resolve_verification_user），
+    使得未验证用户也能在登录前完成自助验证。"""
     try:
-        code = request_code(db, user, payload.channel, payload.target)
+        target_user = _resolve_verification_user(payload, user, db)
+        code = request_code(db, target_user, payload.channel, payload.target)
     except VerificationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     resp = {"sent": True, "channel": payload.channel, "expires_in": settings.OTP_TTL_SECONDS}
@@ -185,18 +221,23 @@ def send_verification(
 @router.post("/verification/confirm", summary="确认验证码并标记渠道已验证")
 def confirm_verification(
     payload: VerificationConfirmIn,
-    user: User = Depends(get_current_user),
+    user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
-    """确认成功后：email 渠道会绑定邮箱并置 email_verified；phone 渠道置 phone_verified。"""
+    """确认成功后：email 渠道会绑定邮箱并置 email_verified；phone 渠道置 phone_verified。
+
+    身份解析同 send（已登录用令牌 / 未登录凭账号密码自证）。"""
     try:
-        confirm_code(db, user, payload.channel, payload.target, payload.code)
+        target_user = _resolve_verification_user(payload, user, db)
+        confirm_code(db, target_user, payload.channel, payload.target, payload.code)
     except VerificationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    # 用解析出的 target_user 回显验证状态，而非可选令牌 user——
+    # 未登录自助验证时 user 为 None，若回显 user.* 会触发 500。
     return {
         "verified": True,
         "channel": payload.channel,
-        "email": user.email or "",
-        "email_verified": user.email_verified,
-        "phone_verified": user.phone_verified,
+        "email": target_user.email or "",
+        "email_verified": target_user.email_verified,
+        "phone_verified": target_user.phone_verified,
     }

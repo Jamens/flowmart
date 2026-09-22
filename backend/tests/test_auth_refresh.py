@@ -10,8 +10,23 @@
 from app.core.security import create_access_token, create_refresh_token
 
 
+def _verify(raw_client, token, target="verified@example.com", channel="email"):
+    """测试夹具：用令牌走 OTP 验证（注册后立刻调用，便于后续登录通过登录验证闸门）。"""
+    h = {"Authorization": f"Bearer {token}"}
+    code = raw_client.post(
+        "/api/v1/auth/verification/send", headers=h,
+        json={"channel": channel, "target": target}
+    ).json()["dev_code"]
+    r = raw_client.post(
+        "/api/v1/auth/verification/confirm", headers=h,
+        json={"channel": channel, "target": target, "code": code},
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_refresh_issues_new_access_and_authenticates(raw_client):
-    raw_client.post("/api/v1/auth/register", json={"username": "ru1", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "ru1", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"])
     raw_client.post("/api/v1/auth/login", json={"username": "ru1", "password": "secret1"})
     # 凭刷新 Cookie 换发新访问令牌
     r = raw_client.post("/api/v1/auth/refresh")
@@ -38,7 +53,8 @@ def test_refresh_token_cannot_be_used_as_access(raw_client):
 
 
 def test_expired_access_token_refreshed_then_works(raw_client):
-    raw_client.post("/api/v1/auth/register", json={"username": "ru2", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "ru2", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"])
     raw_client.post("/api/v1/auth/login", json={"username": "ru2", "password": "secret1"})
     # 塞一个已过期的访问令牌进 Cookie
     expired = create_access_token(1, expires_minutes=-1)

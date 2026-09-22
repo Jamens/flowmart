@@ -92,6 +92,11 @@ def _backfill_admin(engine) -> None:
             admin.is_admin = True
             s.commit()
             print(f"[init_db] 已将 {settings.BOOTSTRAP_ADMIN} 设为管理员")
+        # 存量库补丁：若初始管理员此前未验证，登录验证闸门会把它锁死，这里一并置为已验证
+        if admin and not (admin.email_verified or admin.phone_verified):
+            admin.email_verified = True
+            s.commit()
+            print(f"[init_db] 已将 {settings.BOOTSTRAP_ADMIN} 标记为已验证（避免被登录闸门锁死）")
 
         # 「零管理员」校验只在已经有用户时才成立：
         # 全新库上用户要等 seed 才创建，此时必然是 0 个用户，若照常校验会让

@@ -59,8 +59,22 @@ def test_login_wrong_password_rejected(raw_client):
     assert r.status_code == 401
 
 
+def _verify(raw_client, token, target="verified@example.com", channel="email"):
+    """测试夹具：用令牌走 OTP 验证（注册后立刻调用，便于后续登录通过验证闸门）。"""
+    h = {"Authorization": f"Bearer {token}"}
+    code = raw_client.post(
+        "/api/v1/auth/verification/send", headers=h, json={"channel": channel, "target": target}
+    ).json()["dev_code"]
+    r = raw_client.post(
+        "/api/v1/auth/verification/confirm", headers=h,
+        json={"channel": channel, "target": target, "code": code},
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_login_success_returns_token(raw_client):
-    raw_client.post("/api/v1/auth/register", json={"username": "carol", "password": "secret1"})
+    reg = raw_client.post("/api/v1/auth/register", json={"username": "carol", "password": "secret1"}).json()
+    _verify(raw_client, reg["access_token"])
     r = raw_client.post("/api/v1/auth/login", json={"username": "carol", "password": "secret1"})
     assert r.status_code == 200, r.text
     assert r.json()["access_token"]
@@ -105,6 +119,8 @@ def test_cross_user_cannot_read_address(raw_client):
     """真实双令牌验证：用户 B 拿不到用户 A 的地址（_assert_owner 拦截）。"""
     a = raw_client.post("/api/v1/auth/register", json={"username": "userA", "password": "secret1"}).json()
     b = raw_client.post("/api/v1/auth/register", json={"username": "userB", "password": "secret1"}).json()
+    _verify(raw_client, a["access_token"], "a@example.com")
+    _verify(raw_client, b["access_token"], "b@example.com")
     token_a = raw_client.post("/api/v1/auth/login", json={"username": "userA", "password": "secret1"}).json()["access_token"]
     token_b = raw_client.post("/api/v1/auth/login", json={"username": "userB", "password": "secret1"}).json()["access_token"]
     h_a = {"Authorization": f"Bearer {token_a}"}

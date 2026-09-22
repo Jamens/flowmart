@@ -17,7 +17,22 @@ def _register(raw_client, username):
         "/api/v1/auth/register", json={"username": username, "password": "secret1"}
     )
     assert r.status_code == 201, r.text
-    return r.json()
+    data = r.json()
+    # 登录验证闸门要求已验证才能登录；rbac 测试只关心角色，不关心验证状态，
+    # 故注册后顺手走 OTP 把账号置为已验证，避免被登录闸门挡住。
+    token = data["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    target = f"{username}@example.com"
+    code = raw_client.post(
+        "/api/v1/auth/verification/send", headers=h,
+        json={"channel": "email", "target": target}
+    ).json()["dev_code"]
+    rc = raw_client.post(
+        "/api/v1/auth/verification/confirm", headers=h,
+        json={"channel": "email", "target": target, "code": code},
+    )
+    assert rc.status_code == 200, rc.text
+    return data
 
 
 def _login_token(raw_client, username):
