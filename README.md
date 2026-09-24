@@ -129,7 +129,7 @@ python -m alembic downgrade -1
 - 登录失败（用户不存在 / 密码错误）统一返回 `401 用户名或密码错误`，不泄露哪些用户名已注册。
 - **生产必须设置 `SECRET_KEY`**：`config.SECRET_KEY` 仍为开发默认值时，非 debug 模式启动会直接报错，杜绝「 anyone can forge token 」。
 - **RBAC 角色权限（已落地）**：角色分「管理员 / 普通买家」，`User.is_admin` 字段 + `require_admin` 依赖闸门。
-  - 用户管理（建/列/禁用账号）与订单流转推进 **仅管理员** 可执行；
+  - 用户管理（建/列/禁用账号）**仅管理员** 可执行；订单流转推进**按角色分流**——管理员可对任意订单执行任意事件，买家仅可对自己的订单执行「取消 / 确认收货」；
   - 普通买家只能改**自己**的资料、只看**自己**的订单；越权访问他人资源统一 `404`，不泄露目标是否存在；
   - 购物车、订单创建、地址归属始终严格取自令牌用户；`GET /users/{id}` 不返回收货地址，地址须经归属校验的 `/users/{id}/addresses` 获取。
   - **初始管理员可配置**：`config.BOOTSTRAP_ADMIN`（默认 `zhangsan`，可经环境变量覆盖）指定首次 `seed` / `init_db` 时提升为管理员的账号；`BOOTSTRAP_ADMIN` 为空会在启动时直接报错，避免「谁都不是管理员」导致系统静默锁死。生产务必改成真实管理员账号。
@@ -211,7 +211,7 @@ python -m alembic downgrade -1
 | PATCH | `/api/v1/categories/{id}` | 修改分类 |
 | DELETE | `/api/v1/categories/{id}` | 删除分类（有商品时拒绝） |
 | GET | `/api/v1/orders/{id}` | 订单详情，含明细、可执行动作、流转时间线 |
-| POST | `/api/v1/orders/{id}/actions/{event}` | 推进流转（pay/ship/confirm/cancel/refund/approve/reject） |
+| POST | `/api/v1/orders/{id}/actions/{event}` | 推进流转（pay/ship/confirm/cancel/refund/approve/reject）；**按角色分流**：管理员任意事件 / 任意订单，买家仅限本人订单的 `cancel`、`confirm` |
 | GET | `/api/v1/workflows/definitions` | 流程定义列表（`?code=` 按业务 code 过滤版本行） |
 | GET | `/api/v1/workflows/definitions/{id}` | 流程定义图（设计器加载用） |
 | PUT | `/api/v1/workflows/definitions/{id}` | 更新流程（全量替换节点与流转边） |
@@ -348,7 +348,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 库存并发控制（DB 层原子条件 UPDATE：`UPDATE ... WHERE stock >= qty` 靠 `rowcount==0` 判不足；归还用 `stock = stock + qty` 累加，杜绝 TOCTOU 超卖与并发丢失更新）
 - [x] 鉴权基础（JWT HS256 + PBKDF2 密码哈希 + 依赖注入身份，前端无法伪造 `user_id`）
 - [x] 跨域收紧 + JWT 写入 httpOnly Cookie（CORS 仅放行 `settings.CORS_ORIGINS`；`POST /auth/logout` 清 Cookie）
-- [x] RBAC 角色权限（管理员 / 普通买家；用户管理与订单流转仅管理员；买家越权访问统一 404；初始管理员可配置且空值启动报错）
+- [x] RBAC 角色权限（管理员 / 普通买家；用户管理仅管理员；订单流转按角色分流——管理员任意事件 / 任意订单，买家仅限本人订单的白名单事件；买家越权访问统一 404；初始管理员可配置且空值启动报错）
 - [x] REST API 全量（auth / products / orders / cart / users+addresses / categories / workflows / admin_db 只读）
 - [x] 购物车（同 SKU 累加、累加受库存约束、结算与清空同事务）
 - [x] 用户与地址（软删除、路径内 `user_id+address_id` 联合过滤防越权、默认地址互斥）
@@ -373,4 +373,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 找回密码与改密码（reset 两步式：已验证邮箱/手机收码 → 凭码重置，**无需旧密码**；投递地址取库中已验证联系方式；`purpose` 隔离防找回码与验证码跨用途复用；登录态 `PATCH /auth/me/password` 凭原密码自助改密，补上此前**无任何改密入口**的缺口）
 - [x] 改密即失效旧令牌（会话失效）：`User.pwd_changed_at`（UTC、截断到整秒）记录最后改密时间，`iat` 早于它即判失效，访问令牌与刷新令牌一并拦截；`NULL` 视为从未改密，存量数据向后兼容无需刷数据
 - [x] init_db 演示密码回填仅限开发环境（`_backfill_demo_passwords` 仅在 `DEBUG=True` 生效；生产 `DEBUG=False` 跳过回填仅告警，绝不静默赋已知明文密码）
-- [x] 测试（pytest 全量 181 passed）
+- [x] 买家侧订单动作（取消订单 / 确认收货）：推进流转端点由「仅管理员」改为**按角色分流**——管理员保持全能（任意订单 / 任意事件），买家可对自己订单触发白名单事件 `BUYER_ALLOWED_EVENTS = {cancel, confirm}`（**默认拒绝**：未登记事件即使流程定义允许也触发不了）；他人订单越权仍统一 404 不泄露存在性；`operator` 一律取认证身份、不信任请求体，杜绝伪造操作人污染 `wf_transition_logs` 审计轨迹（此前服务层 `OrderService.cancel()` 默认 `operator="user"` 表明取消本就按买家自助设计，但 API 层没暴露，属「服务层有、接口层没接通」的断层）
+- [x] 测试（pytest 全量 193 passed）

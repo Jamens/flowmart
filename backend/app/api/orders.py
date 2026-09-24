@@ -5,7 +5,13 @@
 
 鉴权：所有接口都必须登录。下单时订单归属固定为当前登录用户（get_current_user），
 不再信任请求体里的 user_id —— 这是防冒充下单的关键。订单列表/详情对非管理员
-按 user_id 收口为「仅自己的订单」；推进订单流转（actions）属于后台运营操作，仅管理员可执行。
+按 user_id 收口为「仅自己的订单」。
+
+推进订单流转（actions）按角色分流，且**两种角色都校验订单归属**：
+- 管理员：可对任意订单执行流程定义支持的任意事件（运营操作 ship/refund/approve/reject…）。
+- 买家：仅可对自己的订单执行 BUYER_ALLOWED_EVENTS 白名单内的事件（取消订单 / 确认收货）。
+  白名单默认是拒绝的——未登记的事件即使流程定义允许，买家也触发不了。
+他人订单的越权访问统一 404，不泄露订单是否存在（与订单详情接口一致）。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -15,7 +21,7 @@ from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.core.pagination import apply_pagination, total_count
-from app.core.security import get_current_user, require_admin, require_verified_contact
+from app.core.security import get_current_user, require_verified_contact
 from app.models.ecommerce import Order, OrderItem, User
 from app.services.order_service import OrderService
 from app.services.workflow_engine import WorkflowError
@@ -35,8 +41,20 @@ class OrderCreateIn(BaseModel):
 
 
 class ActionIn(BaseModel):
-    operator: str = "admin"
-    comment: str = ""
+    # operator 刻意不作为入参：一律取认证身份（见 fire_event），
+    # 否则调用方可伪造 operator="admin" 把自己的动作记到他人头上、污染流转日志。
+    # comment 限长与 wf_transition_logs.comment 列宽（String(255)）对齐：
+    # 生产用 MySQL 时超长会 DataError -> 500，而 SQLite 不校验长度、测试跑不出来。
+    comment: str = Field("", max_length=255)
+
+
+# 买家可自助触发的事件白名单。
+# 这是**权限策略**，刻意不放进流程定义（wf_transitions）里：让「谁能做什么」集中可见、
+# 可审计，而不是散落在流程图节点中难以 review。代价是新增买家可执行事件时要改这里，
+# 但权限变更本就该是显式、需要过审的动作。
+# 默认拒绝：未登记的事件（ship / refund / approve / reject 等）即使流程定义允许，
+# 买家也一律触发不了，必须由管理员执行。
+BUYER_ALLOWED_EVENTS = frozenset({"cancel", "confirm"})
 
 
 def _safe(fn, default):
@@ -168,17 +186,25 @@ def create_order(
     return _serialize(order, svc)
 
 
-@router.post("/{order_id}/actions/{event}", summary="推进订单流转（仅管理员）")
+@router.post("/{order_id}/actions/{event}", summary="推进订单流转（管理员任意事件 / 买家仅可取消或确认收货）")
 def fire_event(
     order_id: int,
     event: str,
     payload: ActionIn = ActionIn(),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
+
+    # 权限分流：管理员可对任意订单执行任意事件；买家只能对自己的订单执行白名单事件。
+    # 他人的订单统一 404（与订单详情一致，不泄露订单是否存在）。
+    if not current_user.is_admin:
+        if order.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="订单不存在")
+        if event not in BUYER_ALLOWED_EVENTS:
+            raise HTTPException(status_code=403, detail=f"买家不可执行 `{event}` 操作")
 
     svc = OrderService(db)
     # 先问引擎「当前能不能执行」，给出比引擎报错更友好的提示
@@ -189,9 +215,12 @@ def fire_event(
             detail=f"当前节点 `{order.current_node_key}` 不可执行 `{event}`"
             f"（可执行：{allowed or '无'}）",
         )
+    # operator 一律取自认证身份，不信任请求体：否则买家可在 body 里伪造
+    # operator="admin"，把自己的动作记到他人头上、污染 wf_transition_logs 审计轨迹
+    operator = current_user.username
     try:
         # 事件名直接透传给服务层，新增流程事件无需改动 API 代码
-        order = svc.trigger(order.id, event, payload.operator, payload.comment)
+        order = svc.trigger(order.id, event, operator, payload.comment)
     except (WorkflowError, ValueError) as exc:
         # 非法流转、参数不合法属于调用方问题 -> 400
         raise HTTPException(status_code=400, detail=str(exc)) from exc

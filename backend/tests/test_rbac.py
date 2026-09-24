@@ -176,7 +176,12 @@ def test_buyer_sees_own_orders_only(raw_client, db, order_flow):
     assert rb[0]["user_id"] == b["id"]
 
 
-def test_order_action_requires_admin(raw_client, db, order_flow):
+def test_buyer_cannot_pay_own_order(raw_client, db, order_flow):
+    """买家不能给自己订单执行 pay：推进流转已按角色分流，pay 不在买家白名单内。
+
+    注意端点已不再是「仅管理员」——买家可对自己订单取消 / 确认收货。
+    这里 403 的原因是事件不在 BUYER_ALLOWED_EVENTS 内，而非缺少管理员角色。
+    """
     a = _register(raw_client, "opUser")
     _verify(db, "opUser")
     h = _auth(raw_client, _login_token(raw_client, "opUser"))
@@ -185,7 +190,7 @@ def test_order_action_requires_admin(raw_client, db, order_flow):
         "/api/v1/orders", headers=h, json={"items": [{"sku_id": sku.id, "quantity": 1}]}
     ).json()
 
-    # 非管理员推进流转 -> 403
+    # 买家触发白名单外事件（pay）-> 403
     assert raw_client.post(f"/api/v1/orders/{order['id']}/actions/pay", headers=h).status_code == 403
 
     # 提升为管理员后才可推进
