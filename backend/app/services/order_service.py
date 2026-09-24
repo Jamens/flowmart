@@ -272,14 +272,18 @@ class OrderService:
         if order is None:
             raise ValueError(f"订单 {order_id} 不存在")
 
-        effect = SIDE_EFFECTS.get(event)
-        if effect:
-            effect(self, order)
-
         instance = self._load_instance(order)
         self.engine.fire(
             instance.id, event, operator=operator, comment=comment
         )
+
+        # 副作用放在 fire 成功之后：fire 可能因并发认领失败而抛错，
+        # 若先跑副作用，「归还库存」这类操作已经生效，只能依赖异常后的回滚兜底。
+        # 先推进、后跑副作用，失败路径上副作用根本没发生过，不依赖回滚。
+        effect = SIDE_EFFECTS.get(event)
+        if effect:
+            effect(self, order)
+
         sync_order_status(order, instance)
         self.db.commit()
         return order

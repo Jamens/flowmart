@@ -274,3 +274,53 @@ def test_concurrent_return_no_lost_update(tmp_path):
 
     assert all(v == "ok" for v in results.values()), f"两笔取消都应成功: {results}"
     assert _fresh_stock(eng, sku_id) == 10, "归还不能丢失更新，必须精确回到 10"
+
+
+def test_concurrent_cancel_same_order_returns_stock_once(tmp_path):
+    """同一订单被并发取消两次：只能成功一次，库存只归还一次（8 -> 10，绝不能是 12）。
+
+    这是工作流 CAS 修复的核心回归：
+    - 修复前：两个请求都读到 pending_payment、都判定可流转、都执行归还库存
+      -> 库存凭空 +2（8 -> 12）
+    - 修复后：后到者条件更新认领失败，而副作用已挪到 fire 成功之后
+      -> 失败路径上副作用根本没跑，库存精确回到 10
+
+    注意与「顺序重复取消」区分：顺序第二次取消会在 available_events 处短路，
+    根本走不到 fire()，因此**测不出**这个并发缺陷，必须用真并发。
+    """
+    eng = _make_engine(tmp_path)
+    buyer_id, (sku_id,) = _seed(eng, [10])
+    Session = sessionmaker(bind=eng, future=True)
+
+    with Session() as s:
+        order = OrderService(s).create_order(
+            user_id=buyer_id, items=[{"sku_id": sku_id, "quantity": 2}]
+        )
+        oid = order.id
+    assert _fresh_stock(eng, sku_id) == 8
+
+    results = {}
+    barrier = threading.Barrier(2)
+
+    def worker(tid):
+        barrier.wait()
+        s = Session()
+        try:
+            OrderService(s).cancel(oid)
+            results[tid] = "ok"
+        except Exception:
+            results[tid] = "fail"
+        finally:
+            s.rollback()
+            s.close()
+
+    t1 = threading.Thread(target=worker, args=(0,))
+    t2 = threading.Thread(target=worker, args=(1,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    ok = [v for v in results.values() if v == "ok"]
+    assert len(ok) == 1, f"并发取消同一订单应恰好一次成功，实际: {results}"
+    assert _fresh_stock(eng, sku_id) == 10, "库存只能归还一次，不能变成 12"

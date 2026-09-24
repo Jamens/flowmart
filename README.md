@@ -374,4 +374,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 改密即失效旧令牌（会话失效）：`User.pwd_changed_at`（UTC、截断到整秒）记录最后改密时间，`iat` 早于它即判失效，访问令牌与刷新令牌一并拦截；`NULL` 视为从未改密，存量数据向后兼容无需刷数据
 - [x] init_db 演示密码回填仅限开发环境（`_backfill_demo_passwords` 仅在 `DEBUG=True` 生效；生产 `DEBUG=False` 跳过回填仅告警，绝不静默赋已知明文密码）
 - [x] 买家侧订单动作（取消订单 / 确认收货）：推进流转端点由「仅管理员」改为**按角色分流**——管理员保持全能（任意订单 / 任意事件），买家可对自己订单触发白名单事件 `BUYER_ALLOWED_EVENTS = {cancel, confirm}`（**默认拒绝**：未登记事件即使流程定义允许也触发不了）；他人订单越权仍统一 404 不泄露存在性；`operator` 一律取认证身份、不信任请求体，杜绝伪造操作人污染 `wf_transition_logs` 审计轨迹（此前服务层 `OrderService.cancel()` 默认 `operator="user"` 表明取消本就按买家自助设计，但 API 层没暴露，属「服务层有、接口层没接通」的断层）
-- [x] 测试（pytest 全量 193 passed）
+- [x] 工作流推进并发安全（防重复触发）：`fire()` 用「条件 UPDATE + rowcount」**原子认领**推进（`WHERE current_node_key=:from AND status='running'`），后到的并发请求必然匹配不到行而显式失败，杜绝两个并发 cancel/refund 都执行归还库存导致**库存凭空变多**；副作用从「fire 之前」挪到「fire 成功之后」，失败路径上副作用根本没发生过、不依赖回滚兜底；`available_events` 对已结束实例返回 `[]`，与 fire 的状态口径对齐。另修正一个 MySQL 陷阱：`rowcount` 是「变更行数」而非「匹配行数」，自环流转（`from == to`）会误报并发冲突，故认领失败时回读一次以区分「无人抢先只是没变更」与「真被并发推进」（SQLite 返回匹配数，**此差异单测跑不出来**，只有生产 MySQL 会暴露）
+- [x] 测试（pytest 全量 197 passed）

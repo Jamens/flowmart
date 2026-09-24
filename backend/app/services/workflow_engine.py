@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from simpleeval import EvalWithCompoundTypes, simple_eval
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.workflow import (
@@ -141,6 +141,10 @@ class WorkflowEngine:
         前端据此渲染按钮：能触发的才显示，避免用户点了才报错。
         """
         instance = self._get_instance(instance_id)
+        # 与 fire() 口径一致：已结束的实例没有任何可执行事件。
+        # 否则前端会渲染出「点了必然报错」的按钮——fire() 里的状态校验会直接抛错。
+        if instance.status != "running":
+            return []
         ctx = {**(instance.context or {}), **(runtime_context or {})}
 
         stmt = (
@@ -211,10 +215,42 @@ class WorkflowEngine:
             )
 
         from_key = instance.current_node_key
-        instance.current_node_key = chosen.to_node_key
-        # 运行时上下文合并进实例，后续节点的条件判断可以引用
-        instance.context = ctx
-        self.db.flush()
+        # 用「条件 UPDATE + rowcount」认领这次推进，而不是裸赋值。
+        # 并发下两个请求会各自读到同一个 current_node_key、都判定「可流转」，
+        # 裸赋值时后提交者直接覆盖前者 —— cancel/refund 的副作用（归还库存）
+        # 就会执行两次，库存凭空变多。条件里带上 from_key 与 status，
+        # 让后到的请求必然匹配不到行，从而显式失败而不是静默覆盖。
+        res = self.db.execute(
+            update(WorkflowInstance)
+            .where(
+                WorkflowInstance.id == instance.id,
+                WorkflowInstance.current_node_key == from_key,
+                WorkflowInstance.status == "running",
+            )
+            .values(current_node_key=chosen.to_node_key, context=ctx),
+            # 不让 SQLAlchemy 同步内存对象：成败一律由下面 rowcount + 回读判定。
+            # 失败路径尤其不能把「目标值」写进内存，否则调用方 catch 后继续用会读到假状态。
+            execution_options={"synchronize_session": False},
+        )
+        if res.rowcount != 1:
+            # rowcount 在 MySQL 下是「变更行数」而非「匹配行数」：
+            # 自环流转（from == to）且 context 未变时，匹配到 1 行但没改动 -> rowcount=0。
+            # SQLite 返回匹配数（1），所以这个差异测试跑不出来、只有生产 MySQL 会暴露。
+            # 因此回读一次，区分「没人抢先、只是没变更」与「真的被并发推进了」。
+            row = self.db.execute(
+                select(WorkflowInstance.current_node_key, WorkflowInstance.status)
+                .where(WorkflowInstance.id == instance.id)
+            ).first()
+            if row is None or row[0] != from_key or row[1] != "running":
+                self.db.expire(instance)  # 清掉内存态，避免调用方 catch 后读到被改错的对象
+                raise WorkflowError(
+                    f"流程实例 {instance_id} 已被并发操作推进"
+                    f"（当前节点不再是 `{from_key}`），请刷新后重试"
+                )
+            # 走到这里：行仍在原节点且运行中 —— 是我们自己匹配到了、只是值没变（自环），视为成功
+        # 让 ORM 对象反映 DB 当前状态：后续结束节点判定与写日志都基于新值
+        # （引擎只 flush 不 commit，同一事务内读得到自己刚写的行）
+        self.db.refresh(instance)
 
         self._write_log(
             instance=instance,
