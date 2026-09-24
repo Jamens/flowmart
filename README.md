@@ -182,7 +182,11 @@ python -m alembic downgrade -1
 | POST | `/api/v1/auth/password/reset/confirm` | 凭验证码重置密码（**无需旧密码**） |
 | PATCH | `/api/v1/auth/me/password` | 登录用户修改自己的密码（需提供正确的原密码） |
 | GET | `/api/v1/products` | 商品列表（含 SKU） |
-| POST | `/api/v1/products` | 创建商品 |
+| POST | `/api/v1/products` | 创建商品（**仅管理员**；否则买家可自建 `price=0.01` 商品绕开改价闸门） |
+| PATCH | `/api/v1/products/{id}/shelf` | 上架 / 下架（**仅管理员**；否则单个买家就能让商城列表空掉） |
+| PATCH | `/api/v1/products/{id}` | 编辑商品（名称 / 描述 / 封面 / 分类，**仅管理员**） |
+| DELETE | `/api/v1/products/{id}` | 删除商品（仅管理员；级联清理 SKU。购物车或历史订单明细存在引用时拒绝，提示改用下架） |
+| PATCH | `/api/v1/products/{id}/skus/{sku_id}` | 调整 SKU 价格 / 库存（**仅管理员**；product_id + sku_id 联合校验防越权改价） |
 | GET | `/api/v1/orders` | 订单列表（管理员见全部，买家仅见自己的订单） |
 | POST | `/api/v1/orders` | 创建订单（自动启动工作流，**归属当前用户**；未验证邮箱/手机返回 `403`） |
 | GET | `/api/v1/cart` | 我的购物车列表（含合计） |
@@ -375,4 +379,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] init_db 演示密码回填仅限开发环境（`_backfill_demo_passwords` 仅在 `DEBUG=True` 生效；生产 `DEBUG=False` 跳过回填仅告警，绝不静默赋已知明文密码）
 - [x] 买家侧订单动作（取消订单 / 确认收货）：推进流转端点由「仅管理员」改为**按角色分流**——管理员保持全能（任意订单 / 任意事件），买家可对自己订单触发白名单事件 `BUYER_ALLOWED_EVENTS = {cancel, confirm}`（**默认拒绝**：未登记事件即使流程定义允许也触发不了）；他人订单越权仍统一 404 不泄露存在性；`operator` 一律取认证身份、不信任请求体，杜绝伪造操作人污染 `wf_transition_logs` 审计轨迹（此前服务层 `OrderService.cancel()` 默认 `operator="user"` 表明取消本就按买家自助设计，但 API 层没暴露，属「服务层有、接口层没接通」的断层）
 - [x] 工作流推进并发安全（防重复触发）：`fire()` 用「条件 UPDATE + rowcount」**原子认领**推进（`WHERE current_node_key=:from AND status='running'`），后到的并发请求必然匹配不到行而显式失败，杜绝两个并发 cancel/refund 都执行归还库存导致**库存凭空变多**；副作用从「fire 之前」挪到「fire 成功之后」，失败路径上副作用根本没发生过、不依赖回滚兜底；`available_events` 对已结束实例返回 `[]`，与 fire 的状态口径对齐。另修正一个 MySQL 陷阱：`rowcount` 是「变更行数」而非「匹配行数」，自环流转（`from == to`）会误报并发冲突，故认领失败时回读一次以区分「无人抢先只是没变更」与「真被并发推进」（SQLite 返回匹配数，**此差异单测跑不出来**，只有生产 MySQL 会暴露）
-- [x] 测试（pytest 全量 197 passed）
+- [x] 商品管理与 SKU 调整（新增 `PATCH /products/{id}` 编辑名称/描述/封面/分类、`PATCH /products/{id}/skus/{sku_id}` 改价与调库存、`DELETE /products/{id}` 删除并级联清理 SKU——此前只有创建与上下架，**改不了也删不掉**，改价调库存更是没有入口。所有商品写操作统一 `require_admin`，**并顺带收紧了既有的创建与上下架**：原先二者只要求登录，买家可自建 `price=0.01 / stock=99999` 的商品达到与改价完全相同的效果（使新增闸门形同虚设），也可一键把全站商品下架让商城列表空掉。调库存区分 `stock`（绝对值盘点修正，语义是「以我为准」、会覆盖并发扣减）与 `stock_delta`（相对量补货，`UPDATE ... SET stock = stock + delta` 原子，不丢更新）。删除沿用分类删除套路：**先校验引用**，购物车（对 skus.id 有外键）或历史订单明细（已售凭证）存在时拒绝硬删并提示改用下架；并发窗口内被加购时兜 `IntegrityError` 为 400 而非 500）
+- [x] 测试（pytest 全量 216 passed）
