@@ -29,6 +29,9 @@ htmlcov/
 # 带前导斜杠：只忽略仓库根这一个目录，避免误伤将来可能出现的同名子目录。
 /uploads/
 
+# 测试产物：pytest 的 JUnit 报告（判测试结果用，不入库）
+junit*.xml
+
 # Node
 node_modules/
 frontend/dist/
