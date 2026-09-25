@@ -269,6 +269,7 @@ Vue 3 + Vite 6 + Element Plus，暗色主题。
 | `backend/scripts/export_schema_html.py` | 生成表结构可视化页面 `docs/schema-viewer.html` |
 | `backend/scripts/export_data_html.py` | 生成数据浏览器页面 `docs/data-viewer.html` |
 | `backend/scripts/cleanup_refresh_tokens.py` | 清理 `refresh_tokens` 死记录（**已过期** + **已撤销超保留期**），支持 `--dry-run`、`--revoked-retention-days`（默认 30）；供 cron / 计划任务每天执行 |
+| `backend/scripts/cleanup_uploads.py` | 清理**孤儿上传图片**（未被任何 `Product.cover` 引用 **且** 超过保留期），支持 `--dry-run`、`--retention-hours`（默认 24）；供 cron 每天执行 |
 
 定期清理示例（`/auth/refresh` 会持续新增行，必须定期回收）：
 
@@ -279,6 +280,16 @@ python backend/scripts/cleanup_refresh_tokens.py --dry-run
 # Linux cron：每天凌晨 3 点
 0 3 * * * cd /path/to/flowmart/backend && python scripts/cleanup_refresh_tokens.py >> /var/log/flowmart-cleanup.log 2>&1
 ```
+
+孤儿图片清理同理（商品删除 / 换封面后旧图不会自动消失，且对外公开可读）：
+
+```bash
+python backend/scripts/cleanup_uploads.py --dry-run
+0 4 * * * cd /path/to/flowmart/backend && python scripts/cleanup_uploads.py >> /var/log/flowmart-cleanup.log 2>&1
+```
+
+> 保留期**不可省略**：上传与保存表单是两次请求，刚传好的图还没挂到商品上，
+> 没有宽限期就会把用户刚上传的封面删掉。
 
 > Windows 可用「任务计划程序」按同样命令建每日任务；容器内可用 Kubernetes CronJob / supervisord。
 > 未接任何后台调度依赖——本项目坚持无第三方调度组件（连 JWT 与 PBKDF2 都是标准库实现）。
@@ -363,7 +374,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 分类（两级树；删除前应用层校验商品/子分类引用，防间接环）
 - [x] 前端管理后台（订单管理页、流程设计器、登录页）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
-- [x] 工具脚本（init_db / seed / export_schema / export_data_html / cleanup_refresh_tokens 定期清理）
+- [x] 工具脚本（init_db / seed / export_schema / export_data_html / cleanup_refresh_tokens 定期清理 / cleanup_uploads 孤儿图片清理）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
 - [x] 购物车前端页面（`CartView.vue`：选 SKU 加购、改数量、移除、合计、选地址结算；数量改动受控渲染，失败回滚到后端真实值）
 - [x] 商品管理页面（`ProductsView.vue`：搜索 / 状态筛选含下架、SKU 展开明细、上架下架、新建商品含动态 SKU 行）
@@ -387,5 +398,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 前端角色 gate（`/auth/me` 补 `is_admin`；前端据此隐藏买家无权入口：**用户管理**整块 tab、商品页「新建商品」按钮与「操作（上下架）」整列。角色只决定**显示**，真正的校验仍在后端——此前前端零角色判断，收紧商品写操作后买家点每个按钮都会撞 403，等于把后端错误甩给用户）
 - [x] 分类 / 流程定义 / admin_db 写操作收紧为管理员（此前**只要求登录**：任意买家可删分类、灌垃圾节点、把在售商品归类清空，更能 `PUT /workflows/definitions/{id}` + `publish` **改写并发布订单状态机**——决定订单往哪流转，严重性高于商品下架；`admin_db.tables` 原本还能枚举库表名。前端同步隐藏「分类管理」「流程设计器」整块 tab，并让 `active` 在角色不足时兜回订单页）
 - [x] 通用限流（注册 / 发验证码 / 找回密码 / 登录 per-IP / OTP 确认 / **下单与结算按 user_id**）：登录失败限流只记**失败**、按 (IP, 用户名)，**换用户名就能重置配额**；而这些端点不看成败只看调用量——**成功调用同样消耗配额**，否则可用正确参数高频批量灌账号、把短信/邮件渠道打爆（有成本且骚扰他人）。登录 per-IP 那层尤其关键：每次密码校验都要跑 PBKDF2（几十毫秒 CPU），「用户名 × N 次」就是 CPU 放大 DoS 与凭证填充的通道。OTP 确认那层按 (IP, 用户名) 记每次请求——每条码自身的 `OTP_CONFIRM_MAX_ATTEMPTS` 会被「重新发码」重置，光靠它挡不住稳态猜码（6 位码 + 10 分钟 TTL）。实现上：复用同一套 `RateLimitStore`（内存 / Redis 可切）与同一套 IP 信任策略（默认 socket 地址，XFF 需显式开 `TRUST_PROXY`），避免两处对「客户端是谁」判断不一致而被绕过；两套限流的键加 `login:` / `gen:` 命名空间隔离，并**共用同一个 store 单例**——否则 `reset_all()` 在 Redis 下清全场、内存下只清自己（同操作两种后端行为不一致，开发环境还复现不出来）。刻意做成**按端点 opt-in** 而非全局中间件：一刀切会误伤高频只读接口，也会让测试因「请求太多」随机失败。阈值按 scope 在**请求时**现读 settings（可 monkeypatch），不是装饰器期固化。与 DB 层「同用户重发限流」「每条码尝试上限」互补：那两个防单用户刷自己 / 单条码被猜，这几个防单 IP 刷一堆账号与稳态猜码。**下单 / 结算是唯一按 user_id 而非 IP 的**：已认证端点有稳定身份，按 IP 会在 NAT / CGNAT 下误伤一片正常用户、在 IPv6 / 代理下又形同虚设；而 `create_order` 会原子扣库存，刷单能把库存打到 0，是业务型 DoS 而非资源型
-- [x] 图片上传（`POST /api/v1/uploads` 仅管理员；`GET /uploads/{filename}` **不鉴权**，供游客看商品封面）：按「上传口子不能变成任意文件写入跳板」设计——**类型按文件头魔数判定而非信任 Content-Type**（否则一段 HTML 标成 `image/png` 就能存进去，是存储型 XSS 入口）；**文件名自己随机生成、客户端文件名完全不参与**（否则 `../../` 可路径穿越）；限大小（默认 2MB，多读 1 字节判定超限，不必把超大文件整体读进内存）；上传目录已加 `.gitignore`。存本地磁盘 + 静态挂载，换 OSS/S3 只需替换写入逻辑，对外返回的 URL 形状不变。加固项：①**按 Content-Length 在接收前就拦一道**——endpoint 拿到的 file 已是「整个请求体接收并落临时文件之后」的结果，光靠 `read(MAX+1)` 只限制「最终存多少」、限制不了「服务器先收了多少」，磁盘 DoS 得在门口挡；②**魔数之外再查结构**（PNG 须 IHDR 起 / IEND 收、JPEG 须 EOI 收），否则「图片头 + 任意 trailer」会被永久存下并对外可读，等于把安全性押在「下游 Content-Type 永远正确」这个不可验证的假设上；③**原子写**（先 `.part` 再 rename）+ `OSError → 507`，避免写一半失败留下会被 `/uploads` 正常提供的永久坏图；④**启动时校验 `UPLOAD_DIR` 不能指向项目根 / backend**——配错会把 `.env`、源码、数据库在**无任何告警**的情况下匿名公开；⑤响应加 `X-Content-Type-Options: nosniff` 兜底；⑥静态挂载显式 `follow_symlink=False`（改 True 会使穿越防护失效）
-- [x] 测试（pytest 全量 251 passed）
+- [x] 图片上传（`POST /api/v1/uploads` 仅管理员；`GET /uploads/{filename}` **不鉴权**，供游客看商品封面）：按「上传口子不能变成任意文件写入跳板」设计——**类型按文件头魔数判定而非信任 Content-Type**（否则一段 HTML 标成 `image/png` 就能存进去，是存储型 XSS 入口）；**文件名自己随机生成、客户端文件名完全不参与**（否则 `../../` 可路径穿越）；限大小（默认 2MB，多读 1 字节判定超限，不必把超大文件整体读进内存）；上传目录已加 `.gitignore`。存本地磁盘 + 静态挂载，换 OSS/S3 只需替换写入逻辑，对外返回的 URL 形状不变。加固项：①**按 Content-Length 在接收前就拦一道**——endpoint 拿到的 file 已是「整个请求体接收并落临时文件之后」的结果，光靠 `read(MAX+1)` 只限制「最终存多少」、限制不了「服务器先收了多少」，磁盘 DoS 得在门口挡；②**魔数之外再查结构**（PNG 须 IHDR 起 / IEND 收、JPEG 须 EOI 收），否则「图片头 + 任意 trailer」会被永久存下并对外可读，等于把安全性押在「下游 Content-Type 永远正确」这个不可验证的假设上；③**原子写**（先 `.part` 再 rename）+ `OSError → 507`，避免写一半失败留下会被 `/uploads` 正常提供的永久坏图；④**启动时校验 `UPLOAD_DIR` 不能指向项目根 / backend**——配错会把 `.env`、源码、数据库在**无任何告警**的情况下匿名公开；⑤响应加 `X-Content-Type-Options: nosniff` 兜底；⑥静态挂载显式 `follow_symlink=False`（改 True 会使穿越防护失效）。**生命周期与配额**：`scripts/cleanup_uploads.py` 清理孤儿图片（未被引**且**超过 24h 保留期——保留期不可省，上传与保存表单是两次请求，否则会删掉用户刚传好还没保存的封面）；配额两层——按 **user_id** 的速率上限（刷上传是最直接的磁盘 DoS）与**总量上限**（默认 512MB，单文件上限挡不住「慢慢攒满磁盘」）
+- [x] 测试（pytest 全量 260 passed）

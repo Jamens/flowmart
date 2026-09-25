@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     # 下单 / 结算：按 **user_id**（不是 IP）计每次请求。create_order 会原子扣库存，
     # 刷单能把库存打到 0 —— 业务型 DoS，比打爆 CPU 更难恢复。
     RATE_LIMIT_ORDER_MAX: int = 20
+    # 上传按 user_id 计：每次上传都会写盘，刷上传是最直接的磁盘 DoS
+    RATE_LIMIT_UPLOAD_MAX: int = 30
     RATE_LIMIT_WINDOW: int = 60  # 秒
 
     # ---- 图片上传（商品封面等）----
@@ -82,6 +84,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = str(PROJECT_ROOT / "uploads")
     UPLOAD_URL_PREFIX: str = "/uploads"
     UPLOAD_MAX_BYTES: int = 2 * 1024 * 1024  # 单文件上限 2MB
+    # 上传目录的**总量**上限：单文件有上限挡不住「慢慢攒满磁盘」，
+    # 而 /uploads 对外公开可读，失控的目录既是成本问题也是暴露面问题。
+    UPLOAD_TOTAL_MAX_BYTES: int = 512 * 1024 * 1024  # 512MB
+    # 孤儿文件的保留期：刚上传的图还没挂到任何商品上（上传与保存表单是两次请求），
+    # 立刻清理会把用户刚传好的封面删掉，所以必须留宽限期。
+    UPLOAD_ORPHAN_RETENTION_SECONDS: int = 24 * 3600
     # 允许的图片类型按**文件头魔数**判定而非信任 Content-Type（见 api/uploads.py），
     # 故这里不提供「允许的类型」配置——类型白名单与魔数表是一一对应的，
     # 放开配置项反而容易配出「声称 png 实际放行任意内容」的洞。

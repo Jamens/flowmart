@@ -18,12 +18,14 @@
 权限分工：上传是管理员操作（商品写操作已经是 require_admin，封面属同一类）；
 而**读取**走静态目录、不鉴权——商品图片需要未登录也能看，这是刻意的。
 """
+import os
 import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from app.core.config import settings
+from app.core.ratelimit import rate_limit_user
 from app.core.security import require_admin
 from app.models.ecommerce import User
 
@@ -71,11 +73,30 @@ def _structurally_ok(data: bytes, ext: str) -> bool:
     return False
 
 
+def _dir_size(upload_dir: Path) -> int:
+    """上传目录当前占用字节数。
+
+    每次上传都扫一遍：配额内（512MB / 单图 2MB ≈ 数百个文件）scandir 的开销
+    远小于一次图片写入，可接受。真到万级文件再换成增量计数器。
+    """
+    total = 0
+    with os.scandir(upload_dir) as it:
+        for entry in it:
+            if entry.is_file():
+                try:
+                    total += entry.stat().st_size
+                except OSError:
+                    continue  # 并发下文件可能已被清理，跳过即可
+    return total
+
+
 @router.post("", status_code=201, summary="上传图片（仅管理员；返回可访问的 URL）")
 async def upload_image(
     request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(require_admin),
+    # 每次上传都要写盘，刷上传是最直接的磁盘 DoS；按 user_id 计（同下单/结算的理由）
+    _rl: None = Depends(rate_limit_user("upload")),
 ):
     # 第一道闸：按声明长度早早拒绝。这是唯一能在「请求体被完整接收并落临时文件」
     # 之前生效的位置——endpoint 里再怎么读，都已经是接收之后的事了。
@@ -110,6 +131,12 @@ async def upload_image(
 
     upload_dir = Path(settings.UPLOAD_DIR)
     upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # 总量上限：单文件上限挡不住「慢慢攒满磁盘」。写入前先算现有占用，
+    # 超限直接拒——等写一半才发现满了会留下半截文件，后面的请求也会连环失败。
+    if _dir_size(upload_dir) + len(data) > settings.UPLOAD_TOTAL_MAX_BYTES:
+        raise HTTPException(status_code=507, detail="上传空间已满，请先清理旧图片")
+
     # 随机名 + 由魔数推导的扩展名：客户端文件名与 Content-Type 都不参与
     name = f"{secrets.token_hex(16)}.{ext}"
     # 原子写：先写 .part 再 rename，避免写一半失败留下会被 /uploads 正常提供的坏图
