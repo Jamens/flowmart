@@ -18,7 +18,8 @@
         <el-option label="仅下架" value="off_shelf" />
       </el-select>
       <el-button @click="load">刷新</el-button>
-      <el-button type="primary" @click="openCreate">新建商品</el-button>
+      <!-- 创建商品是 require_admin：买家点了只会 403，直接不展示 -->
+      <el-button v-if="isAdmin" type="primary" @click="openCreate">新建商品</el-button>
     </div>
 
     <el-table :data="list" stripe v-loading="loading">
@@ -59,7 +60,8 @@
           {{ row.skus.reduce((s, i) => s + i.stock, 0) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="110">
+      <!-- 上下架是 require_admin：整列对买家隐藏，不留一个点下去必然报错的空列 -->
+      <el-table-column v-if="isAdmin" label="操作" width="110">
         <template #default="{ row }">
           <el-button
             size="small"
@@ -180,6 +182,13 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
+
+// 角色只决定「显示什么」，真正的权限校验永远在后端：
+// 后端对商品写操作是 require_admin，这里隐藏只是避免买家点出一片 403。
+// 供模板直接使用；脚本内需通过 props.isAdmin 引用（直接用 isAdmin 会 ReferenceError）。
+const props = defineProps({
+  isAdmin: { type: Boolean, default: false },
+})
 
 const list = ref([])
 const loading = ref(false)

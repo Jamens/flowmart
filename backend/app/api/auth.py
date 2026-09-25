@@ -298,6 +298,9 @@ def me(user: User = Depends(get_current_user)):
         "email_verified": user.email_verified,
         "phone_verified": user.phone_verified,
         "is_active": user.is_active,
+        # 前端需要它来隐藏买家无权访问的入口：后端对管理员接口是硬 403，
+        # 但前端不隐藏的话，买家每点一个按钮都弹「需要管理员权限」，体验很差。
+        "is_admin": user.is_admin,
     }
 
 

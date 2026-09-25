@@ -84,6 +84,25 @@ def test_me_requires_auth(raw_client):
     assert raw_client.get("/api/v1/auth/me").status_code == 401
 
 
+def test_me_exposes_is_admin(client, db):
+    """/auth/me 必须带 is_admin：前端靠它隐藏买家无权访问的入口（新建商品、上下架等）。
+
+    缺了这个字段前端就无从判断角色，只能把管理员接口的 403 直接甩给用户，
+    体验是「点哪哪报错」。角色只用于**显示**，真正的校验仍在后端。
+    """
+    assert client.get("/api/v1/auth/me").json()["is_admin"] is True
+
+    from app.models.ecommerce import User
+
+    buyer = User(username="me_buyer", password_hash=hash_password("secret1"), is_admin=False)
+    db.add(buyer)
+    db.commit()
+    db.refresh(buyer)
+
+    client.as_user(buyer)
+    assert client.get("/api/v1/auth/me").json()["is_admin"] is False
+
+
 def test_protected_endpoint_requires_auth(raw_client):
     # 购物车是受保护资源，未登录必须 401，不能靠请求体里的 user_id 混进去
     assert raw_client.get("/api/v1/cart").status_code == 401

@@ -15,12 +15,13 @@
           <CartView />
         </el-tab-pane>
         <el-tab-pane label="商品管理" name="products">
-          <ProductsView />
+          <ProductsView :is-admin="isAdmin" />
         </el-tab-pane>
         <el-tab-pane label="分类管理" name="categories">
           <CategoriesView />
         </el-tab-pane>
-        <el-tab-pane label="用户管理" name="users">
+        <!-- 用户列表接口是 require_admin，买家进来必然 403，直接隐藏整块 tab -->
+        <el-tab-pane v-if="isAdmin" label="用户管理" name="users">
           <UsersView />
         </el-tab-pane>
         <el-tab-pane label="流程设计器" name="designer">
@@ -45,29 +46,37 @@ import DesignerView from './views/DesignerView.vue'
 // 登录态由后端 httpOnly Cookie 决定，前端不再持有明文令牌
 const loggedIn = ref(false)
 const active = ref('orders')
+// 角色用于隐藏买家无权访问的入口。后端对管理员接口是硬 403（users / admin_db /
+// 商品写操作），但前端若不做隐藏，买家点每个按钮都会弹「需要管理员权限」，
+// 等于把后端错误直接甩给用户。角色只影响**显示**，真正的校验永远在后端。
+const isAdmin = ref(false)
+
+async function probe() {
+  // 凭 Cookie 探活：已登录则直接进入后台，并取回角色
+  try {
+    const me = await api.me()
+    loggedIn.value = true
+    isAdmin.value = !!me.is_admin
+  } catch {
+    loggedIn.value = false
+    isAdmin.value = false
+  }
+  // 角色变化后若停在已被隐藏的「用户管理」tab，内容区会空白且无提示，兜回订单页
+  if (!isAdmin.value && active.value === 'users') active.value = 'orders'
+}
 
 // 任意接口 401（Cookie 失效）时回到登录页
 onMounted(async () => {
   setUnauthorizedHandler(() => {
     loggedIn.value = false
+    isAdmin.value = false
   })
-  // 凭 Cookie 探活：已登录则直接进入后台
-  try {
-    await api.me()
-    loggedIn.value = true
-  } catch {
-    loggedIn.value = false
-  }
+  await probe()
 })
 
 async function onLoggedIn() {
   // 登录接口已写入 httpOnly Cookie，无需前端存令牌；探活确认后进入后台
-  try {
-    await api.me()
-    loggedIn.value = true
-  } catch {
-    loggedIn.value = false
-  }
+  await probe()
 }
 
 async function onLogout() {
@@ -77,6 +86,8 @@ async function onLogout() {
     // 忽略：即便失败也强制回到登录页
   }
   loggedIn.value = false
+  isAdmin.value = false
+  active.value = 'orders'
 }
 </script>
 
