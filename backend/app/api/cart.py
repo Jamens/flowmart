@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.ratelimit import rate_limit_user
 from app.core.security import get_current_user, require_verified_contact
 from app.models.ecommerce import CartItem, Sku, User
 from app.services.order_service import OrderService
@@ -190,6 +191,8 @@ def checkout(
     payload: CheckoutIn,
     current_user: User = Depends(require_verified_contact),
     db: Session = Depends(get_db),
+    # 结算会原子扣库存，刷单能把库存打到 0（业务型 DoS）。按 user_id 而非 IP 计
+    _rl: None = Depends(rate_limit_user("order")),
 ):
     """购物车结算：生成订单并清空已结算的商品，两者在同一事务内完成。
 

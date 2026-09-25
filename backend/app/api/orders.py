@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.core.pagination import apply_pagination, total_count
+from app.core.ratelimit import rate_limit_user
 from app.core.security import get_current_user, require_verified_contact
 from app.models.ecommerce import Order, OrderItem, User
 from app.services.order_service import OrderService
@@ -169,6 +170,9 @@ def create_order(
     payload: OrderCreateIn,
     current_user: User = Depends(require_verified_contact),
     db: Session = Depends(get_db),
+    # 下单会原子扣库存，刷单能把库存打到 0（业务型 DoS）。
+    # 按 user_id 而非 IP：NAT 下 IP 会误伤一片正常用户，代理下又能随手换
+    _rl: None = Depends(rate_limit_user("order")),
 ):
     svc = OrderService(db)
     try:

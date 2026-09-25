@@ -8,9 +8,11 @@
 若复用同一个用户，会先撞上 DB 层的「同用户重发限流」（OTP_MAX_PER_WINDOW），
 那就测不到本次加的 IP 维度限流了。
 """
+from decimal import Decimal
+
 from app.core.config import settings
 from app.core.security import hash_password
-from app.models.ecommerce import User
+from app.models.ecommerce import Product, Sku, User
 
 
 def _mk_user(db, username: str, phone: str, verified: bool = False) -> User:
@@ -116,6 +118,54 @@ def test_otp_confirm_over_limit_returns_429(raw_client, db, monkeypatch):
                   "username": "rl_otp", "password": "secret1"},
         )
     assert r.status_code == 429
+
+
+def _mk_sku(db, code="RL-SKU", stock=100) -> Sku:
+    p = Product(name="限流测试商品", status="on_sale")
+    db.add(p)
+    db.flush()
+    s = Sku(product_id=p.id, sku_code=code, spec="默认",
+            price=Decimal("10.00"), stock=stock)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+def test_order_create_over_limit_returns_429(client, db, monkeypatch):
+    """下单限流：create_order 会**原子扣库存**，刷单能把库存打到 0（业务型 DoS）。"""
+    monkeypatch.setattr(settings, "RATE_LIMIT_ORDER_MAX", 2)
+    sku = _mk_sku(db)
+
+    def order():
+        return client.post(
+            "/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]}
+        )
+
+    assert order().status_code == 201
+    assert order().status_code == 201
+    assert order().status_code == 429
+
+
+def test_order_limit_is_per_user_not_shared(client, db, monkeypatch):
+    """按 user_id 计数：A 打满配额不该连坐 B。
+
+    这是与 IP 维度的关键区别——若按 IP 计，同出口 IP 下的其他用户会被误伤。
+    """
+    monkeypatch.setattr(settings, "RATE_LIMIT_ORDER_MAX", 1)
+    sku = _mk_sku(db, "RL-SKU2")
+
+    def order():
+        return client.post(
+            "/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]}
+        )
+
+    assert order().status_code == 201
+    assert order().status_code == 429, "同一用户第二次应被限"
+
+    buyer = _mk_user(db, "rl_order_b", "13800007000", verified=True)
+    client.as_user(buyer)
+    assert order().status_code == 201, "另一用户不应受同一 IP 上他人配额的影响"
 
 
 def test_login_limit_and_register_limit_are_independent(raw_client, db):

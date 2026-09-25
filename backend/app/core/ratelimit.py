@@ -24,9 +24,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from app.core.config import settings
+from app.core.security import get_current_user
 
 
 @dataclass
@@ -266,13 +267,24 @@ class RateLimiter:
     def _client_ip(request: Request) -> str:
         return LoginRateLimiter._client_ip(request)
 
-    def _key(self, request: Request, scope: str) -> str:
+    def _key(self, request: Request, scope: str, identity: str | None = None) -> str:
         # gen: 命名空间，与登录限流的 login: 前缀隔离（见 LoginRateLimiter._key 注释）
-        return f"gen:{scope}:{self._client_ip(request)}"
+        # identity 优先：已登录端点按身份计数，公共端点才退回 IP
+        return f"gen:{scope}:{identity or self._client_ip(request)}"
 
-    def hit(self, request: Request, scope: str, limit: int, window: int) -> int:
-        """记一次请求：返回 0 表示未超限，否则返回建议的 Retry-After 秒数。"""
-        key = self._key(request, scope)
+    def hit(
+        self,
+        request: Request,
+        scope: str,
+        limit: int,
+        window: int,
+        identity: str | None = None,
+    ) -> int:
+        """记一次请求：返回 0 表示未超限，否则返回建议的 Retry-After 秒数。
+
+        identity 非空时按身份计数（已认证端点），否则按客户端 IP（公共端点）。
+        """
+        key = self._key(request, scope, identity)
         count = self._store.register_hit(key, window)
         if count > limit:
             return self._store.ttl(key, window)
@@ -302,6 +314,36 @@ def rate_limit(scope: str):
         if limit <= 0:
             return
         retry = limiter.hit(request, scope, limit, settings.RATE_LIMIT_WINDOW)
+        if retry:
+            raise HTTPException(
+                status_code=429,
+                detail="请求过于频繁，请稍后再试",
+                headers={"Retry-After": str(retry)},
+            )
+
+    return _dep
+
+
+def rate_limit_user(scope: str):
+    """已认证端点的限流：按 **user_id** 计数，而不是 IP。
+
+    为什么这类端点不能用 IP 做维度：
+    - NAT / CGNAT 下同一出口 IP 会误伤一片正常用户（办公网、移动网络）；
+    - 反过来 IPv6 / 代理下攻击者又能随手换 IP，IP 维度形同虚设。
+    已登录接口本来就有稳定身份，就该按身份限。
+
+    典型场景是下单 / 结算：`create_order` 会**原子扣库存**，刷单可以把库存
+    打到 0 —— 这是业务型 DoS，比打爆 CPU 更难恢复。
+    """
+
+    def _dep(request: Request, current_user=Depends(get_current_user)) -> None:
+        limit = getattr(settings, f"RATE_LIMIT_{scope.upper()}_MAX", 0)
+        if limit <= 0:
+            return
+        retry = limiter.hit(
+            request, scope, limit, settings.RATE_LIMIT_WINDOW,
+            identity=f"user:{current_user.id}",
+        )
         if retry:
             raise HTTPException(
                 status_code=429,

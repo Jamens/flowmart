@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # 每条码自身的 OTP_CONFIRM_MAX_ATTEMPTS 会被「重新发码」重置，
     # 稳态猜码速率 = 尝试数/码 × 码数/分，不额外限住就是个可用的爆破通道。
     RATE_LIMIT_OTP_MAX: int = 10
+    # 下单 / 结算：按 **user_id**（不是 IP）计每次请求。create_order 会原子扣库存，
+    # 刷单能把库存打到 0 —— 业务型 DoS，比打爆 CPU 更难恢复。
+    RATE_LIMIT_ORDER_MAX: int = 20
     RATE_LIMIT_WINDOW: int = 60  # 秒
 
     # 邮箱/手机验证码（OTP）：申请→确认两步式，确认后标记对应渠道已验证。
