@@ -20,6 +20,23 @@ from app.models.ecommerce import User  # noqa: E402
 from app.services.workflow_engine import WorkflowEngine  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiters():
+    """限流器是模块级单例，跨用例共享计数会互相干扰，必须每个用例重置。
+
+    TestClient 的客户端地址恒为 "testclient"，所有用例共用同一个限流键——
+    不重置的话，前面用例注册的账号数会累计到后面，导致**与限流无关**的用例
+    莫名其妙拿到 429。登录限流原本由各用例自行 reset_all，这里统一收口。
+    """
+    from app.core.ratelimit import limiter, login_limiter
+
+    login_limiter.reset_all()
+    limiter.reset_all()
+    yield
+    login_limiter.reset_all()
+    limiter.reset_all()
+
+
 @pytest.fixture
 def db(tmp_path):
     """每个用例一份独立的 SQLite 库。"""

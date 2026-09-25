@@ -81,12 +81,23 @@ def test_confirm_consumed_code_rejected(client):
     assert _confirm(client, "email", "reuse@example.com", code).status_code == 400
 
 
-def test_resend_rate_limit(client):
-    """同一渠道在窗口内超过 OTP_MAX_PER_WINDOW 次即 429。"""
+def test_resend_rate_limit(client, monkeypatch):
+    """同一渠道在窗口内超过 OTP_MAX_PER_WINDOW 次即 429。
+
+    每次请求换一个出口 IP（X-Forwarded-For）：新增的「每 IP 发码限流」与本用例要测的
+    「DB 层同用户重发限流」会在**同一次请求**上同时触发，不换 IP 的话即使把 DB 层
+    限流删掉，本用例照样绿——那就测不到它本该测的东西了。换 IP 后 IP 桶永远填不满，
+    429 只可能来自 DB 层。
+    """
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_TRUST_PROXY", True)
     target = "ratelimit@example.com"
     ok = 0
-    for _ in range(6):
-        r = _send(client, "email", target)
+    for i in range(6):
+        r = client.post(
+            f"{AUTH}/verification/send",
+            json={"channel": "email", "target": target},
+            headers={"X-Forwarded-For": f"10.0.0.{i}"},
+        )
         if r.status_code == 200:
             ok += 1
         elif r.status_code == 429:

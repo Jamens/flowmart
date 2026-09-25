@@ -55,6 +55,24 @@ class Settings(BaseSettings):
     # 例如 "redis://127.0.0.1:6379/0"。连不上会在启动时直接报错（fail-fast）。
     LOGIN_RATE_LIMIT_REDIS_URL: str = ""
 
+    # ---- 通用限流（注册 / 验证码 / 找回密码）：防灌账号、验证码轰炸 ----
+    # 与登录限流的区别：登录只记**失败**（防密码爆破），这里记**每次请求**——
+    # 这类端点不看成败只看调用量，一次成功调用同样消耗配额，
+    # 否则攻击者可用正确参数高频调用把短信/邮件渠道打爆、或刷出一堆账号。
+    # 计数后端与登录限流共用（同一个 LOGIN_RATE_LIMIT_REDIS_URL）。
+    RATE_LIMIT_REGISTER_MAX: int = 5  # 每 IP 每窗口最多注册次数
+    RATE_LIMIT_CODE_MAX: int = 5  # 每 IP 每窗口最多发码次数（验证 / 找回密码）
+    # 登录的 **per-IP** 上限，与上面「登录失败限流」互补：
+    # 后者按 (IP, 用户名) 只记失败，换用户名就能重置配额；而每次密码校验都要跑
+    # PBKDF2（约几十毫秒 CPU），于是「用户名 × 5 次」会变成 CPU 放大 DoS
+    # 与凭证填充的通道。这一层不看用户名也不看成败，只看这个 IP 的登录请求量。
+    RATE_LIMIT_LOGIN_MAX: int = 30
+    # OTP 确认（6 位码）的猜测上限，按 (IP, 用户名) 记**每次请求**：
+    # 每条码自身的 OTP_CONFIRM_MAX_ATTEMPTS 会被「重新发码」重置，
+    # 稳态猜码速率 = 尝试数/码 × 码数/分，不额外限住就是个可用的爆破通道。
+    RATE_LIMIT_OTP_MAX: int = 10
+    RATE_LIMIT_WINDOW: int = 60  # 秒
+
     # 邮箱/手机验证码（OTP）：申请→确认两步式，确认后标记对应渠道已验证。
     OTP_LENGTH: int = 6  # 验证码位数（纯数字）
     OTP_TTL_SECONDS: int = 600  # 验证码有效期（10 分钟）

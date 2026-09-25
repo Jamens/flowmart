@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.ratelimit import login_limiter
+from app.core.ratelimit import limiter, login_limiter, rate_limit
 from app.core.security import (
     JWTError,
     clear_auth_cookie,
@@ -115,7 +115,13 @@ class LoginIn(BaseModel):
 
 
 @router.post("/register", status_code=201, summary="注册并直接登录")
-def register(payload: RegisterIn, response: Response, db: Session = Depends(get_db)):
+def register(
+    payload: RegisterIn,
+    response: Response,
+    db: Session = Depends(get_db),
+    # 注册限流：防脚本批量灌账号。不看成败——成功注册同样消耗配额
+    _rl: None = Depends(rate_limit("register")),
+):
     if db.scalar(select(User).where(User.username == payload.username)):
         raise HTTPException(status_code=400, detail=f"用户名 {payload.username} 已存在")
     user = User(
@@ -142,7 +148,16 @@ def register(payload: RegisterIn, response: Response, db: Session = Depends(get_
 
 
 @router.post("/login", summary="登录换取令牌")
-def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+def login(
+    payload: LoginIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    # per-IP 上限：与下面 (IP, 用户名) 的「只记失败」互补。后者换用户名就重置配额，
+    # 而每次密码校验都要跑 PBKDF2（几十毫秒 CPU），不限住就是 CPU 放大 DoS
+    # 与凭证填充的通道。这一层不看用户名、也不看成败，只看这个 IP 的登录请求量。
+    _rl: None = Depends(rate_limit("login")),
+):
     # 先查限流：同一 (IP, 用户名) 窗口内失败过多直接拒，阻断密码爆破
     if login_limiter.is_blocked(request, payload.username):
         retry = login_limiter.retry_after(request, payload.username)
@@ -343,6 +358,9 @@ def send_verification(
     payload: VerificationSendIn,
     user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
+    # 发码限流：短信/邮件是有成本的外调渠道，被刷会直接烧钱且骚扰他人。
+    # 与 DB 层的「同用户重发限流」互补：那个防单用户刷自己，这个防单 IP 刷一堆账号
+    _rl: None = Depends(rate_limit("code")),
 ):
     """申请一次性验证码。开发环境（OTP_DEV_RETURN_CODE=True）会在响应里回传 dev_code 便于联调，
     生产必须关掉该开关（配置校验会强制）。
@@ -360,15 +378,40 @@ def send_verification(
     return resp
 
 
+def _guard_otp_bruteforce(request: Request, username: str | None) -> None:
+    """OTP 确认限流：6 位纯数字码，不限住就是个可用的爆破通道。
+
+    为什么在 handler 里计数而不是用 Depends：要按 (IP, 用户名) 计数，
+    而 Depends 在 body 校验**之前**执行，那时还拿不到 payload.username。
+
+    为什么不能只靠每条码的 OTP_CONFIRM_MAX_ATTEMPTS：重新发码会作废旧码、
+    新码又给满 5 次尝试，稳态猜码速率 = 尝试数/码 × 码数/分，够跑出可观的量。
+    """
+    retry = limiter.hit(
+        request,
+        f"otp:{username or ''}",
+        settings.RATE_LIMIT_OTP_MAX,
+        settings.RATE_LIMIT_WINDOW,
+    )
+    if retry:
+        raise HTTPException(
+            status_code=429,
+            detail="请求过于频繁，请稍后再试",
+            headers={"Retry-After": str(retry)},
+        )
+
+
 @router.post("/verification/confirm", summary="确认验证码并标记渠道已验证")
 def confirm_verification(
     payload: VerificationConfirmIn,
+    request: Request,
     user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     """确认成功后：email 渠道会绑定邮箱并置 email_verified；phone 渠道置 phone_verified。
 
     身份解析同 send（已登录用令牌 / 未登录凭账号密码自证）。"""
+    _guard_otp_bruteforce(request, payload.username)
     try:
         target_user = _resolve_verification_user(payload, user, db)
         confirm_code(db, target_user, payload.channel, payload.target, payload.code)
@@ -418,7 +461,12 @@ def _reset_target(user: User, channel: str) -> str:
 
 
 @router.post("/password/reset/send", summary="申请找回密码验证码（无需旧密码）")
-def password_reset_send(payload: PasswordResetRequestIn, db: Session = Depends(get_db)):
+def password_reset_send(
+    payload: PasswordResetRequestIn,
+    db: Session = Depends(get_db),
+    # 同上：找回密码也会触发发码，同样需要防轰炸
+    _rl: None = Depends(rate_limit("code")),
+):
     """账号找回：对已验证邮箱/手机申请验证码，无需提供旧密码（面向忘记密码 / 生产空密码账号）。
 
     身份 = 用户名 + 控制已验证联系方式（由 OTP 证明），因此不需要旧密码。
@@ -439,11 +487,14 @@ def password_reset_send(payload: PasswordResetRequestIn, db: Session = Depends(g
 
 
 @router.post("/password/reset/confirm", summary="凭验证码重置密码")
-def password_reset_confirm(payload: PasswordResetConfirmIn, db: Session = Depends(get_db)):
+def password_reset_confirm(
+    payload: PasswordResetConfirmIn, request: Request, db: Session = Depends(get_db)
+):
     """确认找回验证码后设置新密码。身份 = 用户名 + 控制已验证联系方式（OTP 证明），无需旧密码。
 
     与验证联系方式用的 OTP 通过 purpose="reset" 隔离：找回码不能拿去当验证用，反之亦然。
     """
+    _guard_otp_bruteforce(request, payload.username)
     user = db.scalar(select(User).where(User.username == payload.username))
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="账号不存在或已禁用")

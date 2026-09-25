@@ -24,6 +24,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from fastapi import HTTPException, Request
+
 from app.core.config import settings
 
 
@@ -55,6 +57,14 @@ class RateLimitStore(ABC):
     @abstractmethod
     def reset_all(self) -> None:
         """清空全部计数（测试隔离 / 运维解封）。"""
+
+    def register_hit(self, key: str, window: int) -> int:
+        """记一次「请求命中」（通用限流），返回当前窗口内总数。
+
+        实现与 register_failure 完全相同（都是窗口内 +1），分开命名只为可读性：
+        登录限流只关心**失败**，通用限流关心**每一次调用**——成功请求也算数。
+        """
+        return self.register_failure(key, window)
 
 
 class MemoryStore(RateLimitStore):
@@ -166,11 +176,25 @@ class RedisStore(RateLimitStore):
             self._r.delete(k)
 
 
+_STORE: RateLimitStore | None = None
+
+
 def _build_store() -> RateLimitStore:
-    url = settings.LOGIN_RATE_LIMIT_REDIS_URL
-    if url:
-        return RedisStore(url)
-    return MemoryStore()
+    """共享的单例后端：登录限流与通用限流**共用一个** store。
+
+    刻意共享（而不是各建一个）有两个原因：
+    1. 两个 RedisStore 会各建一条连接、启动时各 ping 一次，纯浪费；
+    2. 更关键的是 `reset_all()` 的语义必须与后端无关：
+       RedisStore.reset_all 按 `flowmart:rl:` 前缀扫描，会**连同另一个限流器的
+       计数一起清掉**；而两个独立 MemoryStore 只会清自己。不共享的话，
+       同一个「解封」操作在内存/Redis 两种后端下行为不一致，
+       开发环境还根本复现不出来——上线才发现解封把全站限流清了。
+    """
+    global _STORE
+    if _STORE is None:
+        url = settings.LOGIN_RATE_LIMIT_REDIS_URL
+        _STORE = RedisStore(url) if url else MemoryStore()
+    return _STORE
 
 
 class LoginRateLimiter:
@@ -194,7 +218,9 @@ class LoginRateLimiter:
         return client.host if client else "unknown"
 
     def _key(self, request, username: str) -> str:
-        return f"{self._client_ip(request)}:{username}"
+        # 带 login: 命名空间：通用限流的键是 `{scope}:{ip}`，两者共用同一个 store，
+        # 不带前缀时伪造的 XFF 可能让两个键撞在一起（互相投毒配额）。
+        return f"login:{self._client_ip(request)}:{username}"
 
     def register_failure(self, request, username: str) -> None:
         self._store.register_failure(self._key(request, username), settings.LOGIN_RATE_LIMIT_WINDOW)
@@ -218,3 +244,69 @@ class LoginRateLimiter:
 
 # 模块级单例：限流状态必须在进程内跨请求共享才有效。
 login_limiter = LoginRateLimiter()
+
+
+class RateLimiter:
+    """通用固定窗口限流：按「客户端 IP + 业务 scope」计数**每次请求**。
+
+    与 LoginRateLimiter 的分工：
+    - 后者只记失败、键带用户名，目标是防「针对某个账号的密码爆破」；
+    - 这里记全部请求、键只带 IP + scope，目标是防「灌账号 / 验证码轰炸 /
+      找回密码轰炸」这类**不看成败、只看频率**的滥用——成功调用同样消耗配额，
+      否则攻击者用正确参数高频调用就能把短信/邮件渠道打爆。
+
+    IP 取值策略刻意与登录限流完全一致（默认 socket 地址，XFF 需显式开信任），
+    避免两套限流对「客户端是谁」判断不一致而被绕过。
+    """
+
+    def __init__(self) -> None:
+        self._store = _build_store()
+
+    @staticmethod
+    def _client_ip(request: Request) -> str:
+        return LoginRateLimiter._client_ip(request)
+
+    def _key(self, request: Request, scope: str) -> str:
+        # gen: 命名空间，与登录限流的 login: 前缀隔离（见 LoginRateLimiter._key 注释）
+        return f"gen:{scope}:{self._client_ip(request)}"
+
+    def hit(self, request: Request, scope: str, limit: int, window: int) -> int:
+        """记一次请求：返回 0 表示未超限，否则返回建议的 Retry-After 秒数。"""
+        key = self._key(request, scope)
+        count = self._store.register_hit(key, window)
+        if count > limit:
+            return self._store.ttl(key, window)
+        return 0
+
+    def reset_all(self) -> None:
+        self._store.reset_all()
+
+
+# 模块级单例：同上，状态必须跨请求共享。
+limiter = RateLimiter()
+
+
+def rate_limit(scope: str):
+    """生成 FastAPI 依赖：按 (IP, scope) 限流，超限返回 429 + Retry-After。
+
+    阈值在**请求时**按 scope 从 settings 现读（`RATE_LIMIT_{SCOPE}_MAX`），
+    刻意在装饰器求值期固化：否则测试无法 monkeypatch 阈值，只能靠「真的打满
+    配额」来测——既慢，又会让断言和默认阈值绑死。0 或负 = 关闭该 scope。
+
+    做成**按端点 opt-in** 而非全局中间件：一刀切会误伤列表/详情这类高频只读
+    接口，也会让测试套件因为「请求太多」而随机失败。
+    """
+
+    def _dep(request: Request) -> None:
+        limit = getattr(settings, f"RATE_LIMIT_{scope.upper()}_MAX", 0)
+        if limit <= 0:
+            return
+        retry = limiter.hit(request, scope, limit, settings.RATE_LIMIT_WINDOW)
+        if retry:
+            raise HTTPException(
+                status_code=429,
+                detail="请求过于频繁，请稍后再试",
+                headers={"Retry-After": str(retry)},
+            )
+
+    return _dep
