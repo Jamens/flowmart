@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.ecommerce import Category, Product, User
 
 router = APIRouter(prefix="/categories", tags=["分类"])
@@ -119,10 +119,10 @@ def category_tree(
     return roots
 
 
-@router.post("", status_code=201, summary="创建分类")
+@router.post("", status_code=201, summary="创建分类（仅管理员）")
 def create_category(
     payload: CategoryIn,
-    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin), db: Session = Depends(get_db),
 ):
     if payload.parent_id:
         _get_category(db, payload.parent_id)  # 父分类必须存在
@@ -133,10 +133,10 @@ def create_category(
     return {"id": c.id, "name": c.name}
 
 
-@router.patch("/{category_id}", summary="修改分类")
+@router.patch("/{category_id}", summary="修改分类（仅管理员）")
 def update_category(
     category_id: int, payload: CategoryUpdateIn,
-    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin), db: Session = Depends(get_db),
 ):
     c = _get_category(db, category_id)
     if payload.parent_id is not None and payload.parent_id:
@@ -150,11 +150,12 @@ def update_category(
     return {"id": c.id, "name": c.name}
 
 
-@router.delete("/{category_id}", summary="删除分类")
+@router.delete("/{category_id}", summary="删除分类（仅管理员）")
 def delete_category(
     category_id: int,
-    # 删分类会改变商品归类，不能让未登录的人调用（此前漏了鉴权）
-    current_user: User = Depends(get_current_user),
+    # 只「必须登录」不够：删分类会改变商品归类，任意买家都能删的话既能灌垃圾节点、
+    # 也能把在售商品的归类清空，属于运营操作，必须管理员。
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     c = _get_category(db, category_id)

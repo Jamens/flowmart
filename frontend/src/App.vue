@@ -17,14 +17,15 @@
         <el-tab-pane label="商品管理" name="products">
           <ProductsView :is-admin="isAdmin" />
         </el-tab-pane>
-        <el-tab-pane label="分类管理" name="categories">
+        <!-- 分类与流程定义的写操作已收紧为 require_admin，买家进来只能看不能改，
+             且改不了任何东西的页面没有意义，整块隐藏 -->
+        <el-tab-pane v-if="isAdmin" label="分类管理" name="categories">
           <CategoriesView />
         </el-tab-pane>
-        <!-- 用户列表接口是 require_admin，买家进来必然 403，直接隐藏整块 tab -->
         <el-tab-pane v-if="isAdmin" label="用户管理" name="users">
           <UsersView />
         </el-tab-pane>
-        <el-tab-pane label="流程设计器" name="designer">
+        <el-tab-pane v-if="isAdmin" label="流程设计器" name="designer">
           <DesignerView />
         </el-tab-pane>
       </el-tabs>
@@ -50,6 +51,9 @@ const active = ref('orders')
 // 商品写操作），但前端若不做隐藏，买家点每个按钮都会弹「需要管理员权限」，
 // 等于把后端错误直接甩给用户。角色只影响**显示**，真正的校验永远在后端。
 const isAdmin = ref(false)
+// 仅管理员可见的 tab（对应后端 require_admin 的写操作）。
+// 与模板里的 v-if 保持一致，避免角色变化后停在已隐藏的 tab 上出现空白。
+const ADMIN_ONLY_TABS = ['categories', 'users', 'designer']
 
 async function probe() {
   // 凭 Cookie 探活：已登录则直接进入后台，并取回角色
@@ -61,8 +65,8 @@ async function probe() {
     loggedIn.value = false
     isAdmin.value = false
   }
-  // 角色变化后若停在已被隐藏的「用户管理」tab，内容区会空白且无提示，兜回订单页
-  if (!isAdmin.value && active.value === 'users') active.value = 'orders'
+  // 角色变化后若停在已被隐藏的 tab，内容区会空白且无提示，兜回订单页
+  if (!isAdmin.value && ADMIN_ONLY_TABS.includes(active.value)) active.value = 'orders'
 }
 
 // 任意接口 401（Cookie 失效）时回到登录页

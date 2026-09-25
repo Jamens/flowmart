@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.ecommerce import User
 from app.models.workflow import (
     WorkflowDefinition,
@@ -154,10 +154,12 @@ def list_versions(
     ]
 
 
-@router.post("/definitions", status_code=201, summary="创建流程定义")
+@router.post("/definitions", status_code=201, summary="创建流程定义（仅管理员）")
 def create_definition(
     payload: DefinitionIn,
-    current_user: User = Depends(get_current_user),
+    # 流程定义就是订单状态机：谁能改图、谁能发布，谁就能决定订单往哪流转。
+    # 只要求登录的话，任意买家都能改写并发布状态机，严重性高于商品下架。
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if db.execute(
@@ -176,11 +178,11 @@ def create_definition(
     return {"id": definition.id, "code": definition.code, "status": definition.status}
 
 
-@router.put("/definitions/{definition_id}", summary="更新流程定义（全量替换图）")
+@router.put("/definitions/{definition_id}", summary="更新流程定义（全量替换图，仅管理员）")
 def update_definition(
     definition_id: int,
     payload: DefinitionIn,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     definition = db.get(WorkflowDefinition, definition_id)
@@ -197,8 +199,8 @@ def update_definition(
     return {"id": definition.id, "status": definition.status}
 
 
-@router.post("/definitions/{definition_id}/publish", summary="发布流程定义")
-def publish_definition(definition_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@router.post("/definitions/{definition_id}/publish", summary="发布流程定义（仅管理员）")
+def publish_definition(definition_id: int, current_user: User = Depends(require_admin), db: Session = Depends(get_db)):
     definition = db.get(WorkflowDefinition, definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail="流程定义不存在")
@@ -241,7 +243,7 @@ def publish_definition(definition_id: int, current_user: User = Depends(get_curr
 
 @router.post("/definitions/{definition_id}/versions", status_code=201, summary="派生新版本（克隆图）")
 def fork_version(
-    definition_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    definition_id: int, current_user: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
     """从任意版本派生一个新草稿版本：克隆节点与流转边，version = max(同 code 版本) + 1。
 
@@ -299,10 +301,10 @@ def fork_version(
     }
 
 
-@router.delete("/definitions/{definition_id}", summary="归档流程定义")
+@router.delete("/definitions/{definition_id}", summary="归档流程定义（仅管理员）")
 def archive_definition(
     definition_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     definition = db.get(WorkflowDefinition, definition_id)

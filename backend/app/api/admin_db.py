@@ -52,8 +52,8 @@ def _assert_table(insp, name: str) -> str:
     return name
 
 
-@router.get("/tables", summary="列出所有表及行数")
-def list_tables(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@router.get("/tables", summary="列出所有表及行数（仅管理员）")
+def list_tables(current_user: User = Depends(require_admin), db: Session = Depends(get_db)):
     insp = inspect(db.bind)
     result = []
     for name in _tables(insp):

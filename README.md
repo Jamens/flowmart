@@ -211,18 +211,20 @@ python -m alembic downgrade -1
 | DELETE | `/api/v1/users/{id}/addresses/{aid}` | 删除地址 |
 | GET | `/api/v1/categories` | 分类列表（带商品数） |
 | GET | `/api/v1/categories/tree` | 分类树 |
-| POST | `/api/v1/categories` | 创建分类 |
-| PATCH | `/api/v1/categories/{id}` | 修改分类 |
-| DELETE | `/api/v1/categories/{id}` | 删除分类（有商品时拒绝） |
+| POST | `/api/v1/categories` | 创建分类（**仅管理员**） |
+| PATCH | `/api/v1/categories/{id}` | 修改分类（**仅管理员**） |
+| DELETE | `/api/v1/categories/{id}` | 删除分类（**仅管理员**；有商品时拒绝） |
 | GET | `/api/v1/orders/{id}` | 订单详情，含明细、可执行动作、流转时间线 |
 | POST | `/api/v1/orders/{id}/actions/{event}` | 推进流转（pay/ship/confirm/cancel/refund/approve/reject）；**按角色分流**：管理员任意事件 / 任意订单，买家仅限本人订单的 `cancel`、`confirm` |
 | GET | `/api/v1/workflows/definitions` | 流程定义列表（`?code=` 按业务 code 过滤版本行） |
 | GET | `/api/v1/workflows/definitions/{id}` | 流程定义图（设计器加载用） |
-| PUT | `/api/v1/workflows/definitions/{id}` | 更新流程（全量替换节点与流转边） |
-| POST | `/api/v1/workflows/definitions/{id}/versions` | 派生新版本（克隆图，version = max+1） |
+| POST | `/api/v1/workflows/definitions` | 创建流程定义（**仅管理员**） |
+| PUT | `/api/v1/workflows/definitions/{id}` | 更新流程（全量替换节点与流转边，**仅管理员**） |
+| POST | `/api/v1/workflows/definitions/{id}/versions` | 派生新版本（克隆图，version = max+1，**仅管理员**） |
 | GET | `/api/v1/workflows/definitions/code/{code}/versions` | 版本历史（按 version 倒序） |
-| POST | `/api/v1/workflows/definitions/{id}/publish` | 发布前校验（必须有 start/end、无悬空引用）；发布时降级同 code 其它 published 版本 |
-| GET | `/api/v1/admin/db/tables` | 数据库表浏览（只读） |
+| POST | `/api/v1/workflows/definitions/{id}/publish` | 发布前校验（必须有 start/end、无悬空引用）；发布时降级同 code 其它 published 版本（**仅管理员**） |
+| DELETE | `/api/v1/workflows/definitions/{id}` | 归档流程定义（**仅管理员**） |
+| GET | `/api/v1/admin/db/tables` | 数据库表浏览（只读，**仅管理员**） |
 
 ### 购物车（`backend/app/api/cart.py`）
 
@@ -381,4 +383,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 工作流推进并发安全（防重复触发）：`fire()` 用「条件 UPDATE + rowcount」**原子认领**推进（`WHERE current_node_key=:from AND status='running'`），后到的并发请求必然匹配不到行而显式失败，杜绝两个并发 cancel/refund 都执行归还库存导致**库存凭空变多**；副作用从「fire 之前」挪到「fire 成功之后」，失败路径上副作用根本没发生过、不依赖回滚兜底；`available_events` 对已结束实例返回 `[]`，与 fire 的状态口径对齐。另修正一个 MySQL 陷阱：`rowcount` 是「变更行数」而非「匹配行数」，自环流转（`from == to`）会误报并发冲突，故认领失败时回读一次以区分「无人抢先只是没变更」与「真被并发推进」（SQLite 返回匹配数，**此差异单测跑不出来**，只有生产 MySQL 会暴露）
 - [x] 商品管理与 SKU 调整（新增 `PATCH /products/{id}` 编辑名称/描述/封面/分类、`PATCH /products/{id}/skus/{sku_id}` 改价与调库存、`DELETE /products/{id}` 删除并级联清理 SKU——此前只有创建与上下架，**改不了也删不掉**，改价调库存更是没有入口。所有商品写操作统一 `require_admin`，**并顺带收紧了既有的创建与上下架**：原先二者只要求登录，买家可自建 `price=0.01 / stock=99999` 的商品达到与改价完全相同的效果（使新增闸门形同虚设），也可一键把全站商品下架让商城列表空掉。调库存区分 `stock`（绝对值盘点修正，语义是「以我为准」、会覆盖并发扣减）与 `stock_delta`（相对量补货，`UPDATE ... SET stock = stock + delta` 原子，不丢更新）。删除沿用分类删除套路：**先校验引用**，购物车（对 skus.id 有外键）或历史订单明细（已售凭证）存在时拒绝硬删并提示改用下架；并发窗口内被加购时兜 `IntegrityError` 为 400 而非 500）
 - [x] 前端角色 gate（`/auth/me` 补 `is_admin`；前端据此隐藏买家无权入口：**用户管理**整块 tab、商品页「新建商品」按钮与「操作（上下架）」整列。角色只决定**显示**，真正的校验仍在后端——此前前端零角色判断，收紧商品写操作后买家点每个按钮都会撞 403，等于把后端错误甩给用户）
-- [x] 测试（pytest 全量 217 passed）
+- [x] 分类 / 流程定义 / admin_db 写操作收紧为管理员（此前**只要求登录**：任意买家可删分类、灌垃圾节点、把在售商品归类清空，更能 `PUT /workflows/definitions/{id}` + `publish` **改写并发布订单状态机**——决定订单往哪流转，严重性高于商品下架；`admin_db.tables` 原本还能枚举库表名。前端同步隐藏「分类管理」「流程设计器」整块 tab，并让 `active` 在角色不足时兜回订单页）
+- [x] 测试（pytest 全量 229 passed）
