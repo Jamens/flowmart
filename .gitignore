@@ -25,6 +25,10 @@ htmlcov/
 # 注意：可见 ≠ 应提交，提交时请勿 git add 该二进制文件。
 !flowmart.db
 
+# 上传的图片：运行时产物，且可能含用户数据，不应入库。
+# 带前导斜杠：只忽略仓库根这一个目录，避免误伤将来可能出现的同名子目录。
+/uploads/
+
 # Node
 node_modules/
 frontend/dist/

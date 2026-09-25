@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     RATE_LIMIT_ORDER_MAX: int = 20
     RATE_LIMIT_WINDOW: int = 60  # 秒
 
+    # ---- 图片上传（商品封面等）----
+    # 本地磁盘 + 静态目录挂载，零外部依赖；换 OSS/S3 只需替换 api/uploads.py
+    # 的写入逻辑，对外返回的 URL 形状不变。
+    UPLOAD_DIR: str = str(PROJECT_ROOT / "uploads")
+    UPLOAD_URL_PREFIX: str = "/uploads"
+    UPLOAD_MAX_BYTES: int = 2 * 1024 * 1024  # 单文件上限 2MB
+    # 允许的图片类型按**文件头魔数**判定而非信任 Content-Type（见 api/uploads.py），
+    # 故这里不提供「允许的类型」配置——类型白名单与魔数表是一一对应的，
+    # 放开配置项反而容易配出「声称 png 实际放行任意内容」的洞。
+
     # 邮箱/手机验证码（OTP）：申请→确认两步式，确认后标记对应渠道已验证。
     OTP_LENGTH: int = 6  # 验证码位数（纯数字）
     OTP_TTL_SECONDS: int = 600  # 验证码有效期（10 分钟）
