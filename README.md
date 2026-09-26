@@ -272,6 +272,7 @@ Vue 3 + Vite 6 + Element Plus，暗色主题。
 | `backend/scripts/export_data_html.py` | 生成数据浏览器页面 `docs/data-viewer.html` |
 | `backend/scripts/cleanup_refresh_tokens.py` | 清理 `refresh_tokens` 死记录（**已过期** + **已撤销超保留期**），支持 `--dry-run`、`--revoked-retention-days`（默认 30）；供 cron / 计划任务每天执行 |
 | `backend/scripts/cleanup_uploads.py` | 清理**孤儿上传图片**（未被任何 `Product.cover` 引用 **且** 超过保留期），支持 `--dry-run`、`--retention-hours`（默认 24）；供 cron 每天执行 |
+| `e2e_acceptance.py` | **端到端验收**：跑在真实 compose 栈上（MySQL + Redis + 生产形态后端），42 项断言覆盖注册/验证/登录、越权、下单主链路、买家自助取消、上传与游客读图、SKU 调库存、刷新令牌轮转与重放、登出。口令从环境变量取，不写死在脚本里 |
 
 定期清理示例（`/auth/refresh` 会持续新增行，必须定期回收）：
 
@@ -292,6 +293,24 @@ python backend/scripts/cleanup_uploads.py --dry-run
 
 > 保留期**不可省略**：上传与保存表单是两次请求，刚传好的图还没挂到商品上，
 > 没有宽限期就会把用户刚上传的封面删掉。
+
+### 端到端验收
+
+功能测试之外，另有一个跑在**真实部署栈**上的验收脚本（不靠 SQLite、不靠开发期开关）：
+
+```bash
+cp .env.example .env        # 改好口令
+docker compose up -d --build
+docker compose run --rm backend python scripts/init_db.py
+docker compose run --rm backend python scripts/seed.py --reset
+
+set -a; . ./.env; set +a    # 把 .env 导入环境变量（脚本只从环境取数据库口令）
+python e2e_acceptance.py    # 期望：通过 42/42
+```
+
+它刻意用**生产形态**跑：`DEBUG=false` 下验证码不会回传给前端，于是脚本从 MySQL 里读出验证码再确认；
+演示密码不会回填，于是管理员账号走「注册 → 验证 → SQL 提升」。刷新令牌相关断言走 **Bearer 头**
+（端点对 API 客户端的支持路径），因为生产模式 `COOKIE_SECURE=true`，非 HTTPS 下 Cookie 行为不可靠。
 
 > Windows 可用「任务计划程序」按同样命令建每日任务；容器内可用 Kubernetes CronJob / supervisord。
 > 未接任何后台调度依赖——本项目坚持无第三方调度组件（连 JWT 与 PBKDF2 都是标准库实现）。
