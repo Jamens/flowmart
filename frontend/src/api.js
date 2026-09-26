@@ -132,6 +132,15 @@ export const api = {
     request(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteCategory: (id) => request(`/categories/${id}`, { method: 'DELETE' }),
 
+  // 统计看板（仅管理员；后端 require_admin，前端只负责不展示入口）
+  stats: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null)
+    ).toString()
+    return request(`/stats${qs ? `?${qs}` : ''}`)
+  },
+  statsTrend: (days = 7) => request(`/stats/trend?days=${days}`),
+
   // 收货地址（必须走 /users/{id}/addresses：用户详情不返回地址，避免 PII 泄露）
   // 注意：地址接口强制归属校验，路径 user_id 必须等于令牌用户，
   // 否则一律 404 —— 即管理员也只能管理自己的地址。

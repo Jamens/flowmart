@@ -11,6 +11,10 @@
         <el-tab-pane label="订单管理" name="orders">
           <OrdersView />
         </el-tab-pane>
+        <!-- 统计接口是 require_admin：不给买家露出入口，否则点进去只会 403 -->
+        <el-tab-pane v-if="isAdmin" label="统计看板" name="stats">
+          <StatsView />
+        </el-tab-pane>
         <el-tab-pane label="购物车" name="cart">
           <CartView />
         </el-tab-pane>
@@ -43,6 +47,7 @@ import ProductsView from './views/ProductsView.vue'
 import CategoriesView from './views/CategoriesView.vue'
 import UsersView from './views/UsersView.vue'
 import DesignerView from './views/DesignerView.vue'
+import StatsView from './views/StatsView.vue'
 
 // 登录态由后端 httpOnly Cookie 决定，前端不再持有明文令牌
 const loggedIn = ref(false)
@@ -53,7 +58,7 @@ const active = ref('orders')
 const isAdmin = ref(false)
 // 仅管理员可见的 tab（对应后端 require_admin 的写操作）。
 // 与模板里的 v-if 保持一致，避免角色变化后停在已隐藏的 tab 上出现空白。
-const ADMIN_ONLY_TABS = ['categories', 'users', 'designer']
+const ADMIN_ONLY_TABS = ['categories', 'users', 'designer', 'stats']
 
 async function probe() {
   // 凭 Cookie 探活：已登录则直接进入后台，并取回角色
