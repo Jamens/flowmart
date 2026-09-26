@@ -327,6 +327,52 @@ frontend/
 docs/            表结构与数据可视化页面（由脚本生成）
 ```
 
+## 部署（Docker）
+
+一条命令起整套环境（backend + MySQL + Redis）。前端构建产物也打进同一个镜像，
+由后端在 8000 端口一起提供——**同源部署**：不需要配 CORS，Cookie 的 Secure / SameSite 也不会因跨站失效。
+
+```bash
+cp .env.example .env        # 至少改 SECRET_KEY 与两个密码
+docker compose up -d --build
+docker compose run --rm backend python scripts/init_db.py   # 首次建表
+docker compose run --rm backend python scripts/seed.py      # 灌演示数据（可选）
+```
+
+打开 <http://localhost:8000>。
+
+### 几个刻意的选择
+
+| 选择 | 原因 |
+| --- | --- |
+| 前后端同镜像、同端口 | 前端用相对路径 `/api/v1`，同源即无需 CORS；少一个 nginx，就少一整套反向代理与容器内 DNS 解析的坑 |
+| 上传目录挂卷 | 不挂卷的话容器一删，商品封面全没 |
+| MySQL 映射宿主 3308 | 避开本机可能已占用的 3306 |
+| Redis 不映射宿主端口 | 限流计数只在 compose 网络内用，避免与本机已装的 Redis（6379）冲突；想用本机 Redis 就把 `LOGIN_RATE_LIMIT_REDIS_URL` 改成 `redis://host.docker.internal:6379/0` |
+| 镜像内以非 root 运行 | 即便容器被攻破，拿到的也只是低权限用户 |
+
+### Redis 与限流
+
+`LOGIN_RATE_LIMIT_REDIS_URL` 非空时，登录失败限流与通用限流都会改用 Redis 计数（同一套 `RateLimitStore`）。
+**多实例部署必须走 Redis**——否则每个容器各计各的，攻击者把请求打散到不同实例就能绕过限流。
+单实例留空即可（用进程内内存，零依赖）。
+
+### 生产环境启动校验
+
+`DEBUG=false` 时配置会在**启动时**强制校验，不满足直接报错退出（而不是悄悄裸奔）：
+
+- `SECRET_KEY` 不能是开发默认值（否则任何人都能伪造令牌）
+- `COOKIE_SECURE` 必须为 `True`（否则会话 Cookie 经明文 HTTP 泄露）
+- `OTP_DEV_RETURN_CODE` 必须为 `False`（否则验证码被明文回传给前端，等于没有验证）
+- `BOOTSTRAP_ADMIN` 不能为空（否则谁都不是管理员，系统静默锁死）
+
+> 本地用 HTTP 调试时若浏览器不接受 Secure Cookie，可临时 `DEBUG=true`，
+> 但那会**同时跳过上述全部校验**，仅限开发。
+
+### CI
+
+`.github/workflows/ci.yml` 跑三件事：后端 pytest、前端 `npm ci && npm run build`、部署镜像构建。
+
 ## MySQL 兼容性验证
 
 开发默认用 SQLite，但生产目标是 MySQL。已在 **MySQL 8.0.45** 上完成实跑验证：
@@ -402,4 +448,5 @@ docs/            表结构与数据可视化页面（由脚本生成）
 - [x] 通用限流（注册 / 发验证码 / 找回密码 / 登录 per-IP / OTP 确认 / **下单与结算按 user_id**）：登录失败限流只记**失败**、按 (IP, 用户名)，**换用户名就能重置配额**；而这些端点不看成败只看调用量——**成功调用同样消耗配额**，否则可用正确参数高频批量灌账号、把短信/邮件渠道打爆（有成本且骚扰他人）。登录 per-IP 那层尤其关键：每次密码校验都要跑 PBKDF2（几十毫秒 CPU），「用户名 × N 次」就是 CPU 放大 DoS 与凭证填充的通道。OTP 确认那层按 (IP, 用户名) 记每次请求——每条码自身的 `OTP_CONFIRM_MAX_ATTEMPTS` 会被「重新发码」重置，光靠它挡不住稳态猜码（6 位码 + 10 分钟 TTL）。实现上：复用同一套 `RateLimitStore`（内存 / Redis 可切）与同一套 IP 信任策略（默认 socket 地址，XFF 需显式开 `TRUST_PROXY`），避免两处对「客户端是谁」判断不一致而被绕过；两套限流的键加 `login:` / `gen:` 命名空间隔离，并**共用同一个 store 单例**——否则 `reset_all()` 在 Redis 下清全场、内存下只清自己（同操作两种后端行为不一致，开发环境还复现不出来）。刻意做成**按端点 opt-in** 而非全局中间件：一刀切会误伤高频只读接口，也会让测试因「请求太多」随机失败。阈值按 scope 在**请求时**现读 settings（可 monkeypatch），不是装饰器期固化。与 DB 层「同用户重发限流」「每条码尝试上限」互补：那两个防单用户刷自己 / 单条码被猜，这几个防单 IP 刷一堆账号与稳态猜码。**下单 / 结算是唯一按 user_id 而非 IP 的**：已认证端点有稳定身份，按 IP 会在 NAT / CGNAT 下误伤一片正常用户、在 IPv6 / 代理下又形同虚设；而 `create_order` 会原子扣库存，刷单能把库存打到 0，是业务型 DoS 而非资源型
 - [x] 图片上传（`POST /api/v1/uploads` 仅管理员；`GET /uploads/{filename}` **不鉴权**，供游客看商品封面）：按「上传口子不能变成任意文件写入跳板」设计——**类型按文件头魔数判定而非信任 Content-Type**（否则一段 HTML 标成 `image/png` 就能存进去，是存储型 XSS 入口）；**文件名自己随机生成、客户端文件名完全不参与**（否则 `../../` 可路径穿越）；限大小（默认 2MB，多读 1 字节判定超限，不必把超大文件整体读进内存）；上传目录已加 `.gitignore`。存本地磁盘 + 静态挂载，换 OSS/S3 只需替换写入逻辑，对外返回的 URL 形状不变。加固项：①**按 Content-Length 在接收前就拦一道**——endpoint 拿到的 file 已是「整个请求体接收并落临时文件之后」的结果，光靠 `read(MAX+1)` 只限制「最终存多少」、限制不了「服务器先收了多少」，磁盘 DoS 得在门口挡；②**魔数之外再查结构**（PNG 须 IHDR 起 / IEND 收、JPEG 须 EOI 收），否则「图片头 + 任意 trailer」会被永久存下并对外可读，等于把安全性押在「下游 Content-Type 永远正确」这个不可验证的假设上；③**原子写**（先 `.part` 再 rename）+ `OSError → 507`，避免写一半失败留下会被 `/uploads` 正常提供的永久坏图；④**启动时校验 `UPLOAD_DIR` 不能指向项目根 / backend**——配错会把 `.env`、源码、数据库在**无任何告警**的情况下匿名公开；⑤响应加 `X-Content-Type-Options: nosniff` 兜底；⑥静态挂载显式 `follow_symlink=False`（改 True 会使穿越防护失效）。**生命周期与配额**：`scripts/cleanup_uploads.py` 清理孤儿图片（未被引**且**超过 24h 保留期——保留期不可省，上传与保存表单是两次请求，否则会删掉用户刚传好还没保存的封面）；配额两层——按 **user_id** 的速率上限（刷上传是最直接的磁盘 DoS）与**总量上限**（默认 512MB，单文件上限挡不住「慢慢攒满磁盘」）
 - [x] 统计看板（`GET /api/v1/stats` 概览 + `/stats/trend` 按天趋势，**仅管理员**）：订单总数 / 状态分布 / **GMV**、商品与 SKU 数 / 库存总量 / 低库存数、活跃用户数、近 N 天订单与销售额。两个刻意的设计：①**只做 SQL 聚合、不把明细读进内存**——订单与商品行数会随时间增长，在 Python 里 `sum()` 迟早拖垮接口；②**GMV 口径是「已支付订单的 pay_amount 之和」**，未支付订单计入订单数但不计入销售额（这条最容易搞错，有专门测试钉死）。低库存阈值做成参数而非写死——不同品类「缺货」标准不同（手机 3 台算紧张、数据线 30 条可能不算）
+- [x] 部署配套（Dockerfile 多阶段构建 + docker-compose + GitHub Actions CI）：前端构建产物打进同一镜像、由后端在 8000 端口一起提供，**同源部署**——前端用相对路径 `/api/v1`，同源即无需 CORS，Cookie 的 Secure/SameSite 也不会因跨站失效，还省掉一整套 nginx 反代与容器内 DNS 解析的坑。镜像以**非 root** 运行并带 HEALTHCHECK；上传目录挂卷（否则容器一删封面全没）；MySQL 映射宿主 3308 避开本机 3306、Redis 不映射宿主端口避免与本机 Redis 冲突。`LOGIN_RATE_LIMIT_REDIS_URL` 默认指向 compose 内的 redis，让限流计数跨实例共享（否则每容器各计各的，把请求打散到不同实例就能绕过限流）。**踩坑**：前端 `Mount("/")` 会按前缀吞掉 `/health`，健康检查必须注册在前端挂载之前，否则 HEALTHCHECK 永远失败、容器被判不健康
 - [x] 测试（pytest 全量 271 passed）

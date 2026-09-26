@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: 后端测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 跑测试
+        run: python -m pytest backend/tests -q
+
+  frontend:
+    name: 前端构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 安装依赖（按 lockfile，避免版本漂移）
+        working-directory: frontend
+        run: npm ci
+      - name: 构建
+        working-directory: frontend
+        run: npm run build
+
+  image:
+    name: 镜像构建
+    runs-on: ubuntu-latest
+    # 依赖上面两步：早失败早发现，不必等最慢的镜像构建
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建部署镜像
+        run: docker build -t flowmart:ci .

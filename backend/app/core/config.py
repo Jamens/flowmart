@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     # 本地磁盘 + 静态目录挂载，零外部依赖；换 OSS/S3 只需替换 api/uploads.py
     # 的写入逻辑，对外返回的 URL 形状不变。
     UPLOAD_DIR: str = str(PROJECT_ROOT / "uploads")
+    # 前端构建产物目录。容器镜像会把 vite 构建结果放进来，由后端以根路径提供
+    # （**同源部署**：没有跨域，Cookie 的 Secure/SameSite 也不会因跨站而失效）。
+    # 开发时该目录不存在，前端仍走 vite dev server（5173），互不影响。
+    FRONTEND_DIST: str = str(PROJECT_ROOT / "static")
     UPLOAD_URL_PREFIX: str = "/uploads"
     UPLOAD_MAX_BYTES: int = 2 * 1024 * 1024  # 单文件上限 2MB
     # 上传目录的**总量**上限：单文件有上限挡不住「慢慢攒满磁盘」，

@@ -73,6 +73,22 @@ async def _upload_security_headers(request: Request, call_next):
     return resp
 
 
+# 健康检查**必须注册在前端挂载之前**：下面的 Mount 按前缀匹配 "/"，
+# 会连 "/health" 一起吞掉（实测返回 404，导致镜像 HEALTHCHECK 永远失败、
+# 容器被判不健康）。同理它也要在 /uploads 挂载之前——不过那个是具体前缀，不冲突。
 @app.get("/health", tags=["system"], summary="健康检查")
 def health() -> dict:
     return {"status": "ok", "project": settings.PROJECT_NAME, "dialect": settings.dialect}
+
+
+# 容器镜像会把前端构建产物放进 FRONTEND_DIST；存在时以根路径提供。
+# 刻意做成**同源部署**：一个端口、一个域，既不用配 CORS，
+# Cookie 的 Secure / SameSite 也不会因为跨站而失效（见 config.py 的 COOKIE_* 说明）。
+# 开发时该目录不存在，前端走 vite dev server，两边互不影响。
+# 放在所有 API 路由**之后**挂载：Starlette 按注册顺序匹配，
+# 先注册的 API 路由优先，"/" 只兜底前端资源。
+_FRONTEND_DIST = Path(settings.FRONTEND_DIST)
+if _FRONTEND_DIST.is_dir():
+    app.mount(
+        "/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend"
+    )

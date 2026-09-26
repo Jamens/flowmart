@@ -1,0 +1,37 @@
+# 构建上下文瘦身：这些目录进 context 会明显拖慢 docker build，
+# 其中 uploads / *.db / .env 属于**决不能打进镜像**的运行时或敏感数据。
+
+.git
+.github
+.workbuddy
+.vscode
+.idea
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# 前端依赖与产物（镜像内会重新 npm ci && npm run build）
+frontend/node_modules/
+frontend/dist/
+
+# 运行时数据：上传的图片与本地数据库，绝不能进镜像
+uploads/
+*.db
+*.sqlite3
+
+# 敏感配置
+.env
+.env.*
+!.env.example
+
+# 测试产物与文档
+junit*.xml
+pt*.log
+docs/
+README.md

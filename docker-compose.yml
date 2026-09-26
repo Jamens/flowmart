@@ -1,0 +1,87 @@
+# 一键起整套环境：backend（含前端产物）+ MySQL + Redis
+#
+# 用法：
+#   cp .env.example .env      # 至少改掉 SECRET_KEY 与两个密码
+#   docker compose up -d --build
+#   docker compose run --rm backend python scripts/init_db.py   # 建表（首次）
+#   docker compose run --rm backend python scripts/seed.py      # 灌演示数据（可选）
+# 然后打开 http://localhost:8000
+#
+# 设计说明见 Dockerfile 顶部：**同源部署**，前后端同一个端口，不需要 CORS。
+
+services:
+  mysql:
+    image: mysql:8.0
+    # utf8mb4 保证 emoji 与生僻字不炸（后端连接串里也带 charset=utf8mb4）
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请先在 .env 里设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-flowmart}
+      MYSQL_USER: ${DB_USER:-flowmart}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?请先在 .env 里设置 DB_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    # 宿主 3308：避开本机可能已占用的 3306（MySQL 默认端口）
+    ports:
+      - "3308:3306"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    # 刻意不映射宿主端口：限流计数只在 compose 网络内使用，
+    # 避免与本机已装的 Redis（6379）冲突。想用本机 Redis 的话，
+    # 改 backend 的 LOGIN_RATE_LIMIT_REDIS_URL 为 host.docker.internal:6379 即可。
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # ---- 生产校验（config.py 在 DEBUG=false 时强制要求，不满足会启动即报错）----
+      DEBUG: "false"
+      SECRET_KEY: ${SECRET_KEY:?请先在 .env 里设置 SECRET_KEY（python -c "import secrets;print(secrets.token_urlsafe(48))"）}
+      COOKIE_SECURE: "true"
+      OTP_DEV_RETURN_CODE: "false"
+      BOOTSTRAP_ADMIN: ${BOOTSTRAP_ADMIN:-zhangsan}
+      # ---- 数据库 ----
+      DB_DIALECT: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-flowmart}
+      DB_USER: ${DB_USER:-flowmart}
+      DB_PASSWORD: ${DB_PASSWORD:?请先在 .env 里设置 DB_PASSWORD}
+      # ---- 其它 ----
+      # 同源部署：前端由后端在 8000 端口一起提供，不需要放行任何跨域源
+      CORS_ORIGINS: '[]'
+      # 限流计数共享。**多实例部署必须走 Redis**，否则每个容器各计各的，
+      # 攻击者把请求打散到不同实例就能绕过限流（见 core/ratelimit.py 顶部说明）。
+      LOGIN_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIR: /app/uploads
+      FRONTEND_DIST: /app/static
+    volumes:
+      # 上传的图片必须落卷：否则容器一删，商品封面全没
+      - uploads-data:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+volumes:
+  mysql-data:
+  redis-data:
+  uploads-data:
