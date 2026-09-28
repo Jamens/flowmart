@@ -7,6 +7,7 @@
 策略：在临时 SQLite 上真跑 `alembic upgrade head`，再用 `alembic check`
 断言「库结构 == 模型」，任何模型改动未写迁移都会被这里拦下。
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,7 +38,11 @@ def _run_alembic(url: str, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def mig_url(tmp_path):
-    return f"sqlite:///{(tmp_path / 'mig.db').as_posix()}"
+    # 默认跑临时 SQLite（零依赖、每次干净）。
+    # 发布前把 MIG_TEST_URL 指向**真实 MySQL** 再跑一遍：SQLite 走 render_as_batch
+    # （新建表→拷数据→删旧表→改名），MySQL 走原生 ALTER，两者执行路径完全不同，
+    # 只验 SQLite 会漏掉「某步 ALTER 在 MySQL 上不支持」这类只在发布当天爆炸的问题。
+    return os.getenv("MIG_TEST_URL") or f"sqlite:///{(tmp_path / 'mig.db').as_posix()}"
 
 
 def test_upgrade_head_creates_every_table(mig_url):

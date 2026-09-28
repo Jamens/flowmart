@@ -83,6 +83,24 @@ python -m alembic downgrade -1
   重新建表并报「table already exists」。
 - MySQL 首次使用需先跑 `init_db.py`（它会建库），再由 alembic 管表结构。
 
+### 发布前：把迁移在真实 MySQL 上跑一遍
+
+`backend/tests/test_migrations.py` 默认跑临时 SQLite，但它**可以指向任意库**：
+
+```bash
+# 用一个专门的库（会建表/删表，别指向有数据的库）
+MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
+  python -m pytest backend/tests/test_migrations.py -q
+```
+
+它验证三件事：`upgrade head` 后模型里的表一张不少、`alembic check` 断言**模型与迁移一致**
+（专抓「改了模型却没生成迁移」）、`downgrade base` 能真正拆掉表（迁移是双向可用的，不是单向门）。
+
+为什么不能只验 SQLite：**两者的执行路径完全不同**。SQLite 走 `render_as_batch`
+（新建表 → 拷数据 → 删旧表 → 改名），MySQL 走原生 `ALTER`。
+只验 SQLite 会漏掉「某步 ALTER 在 MySQL 上不支持」这类只在发布当天爆炸、
+且那时回滚窗口最窄的问题。
+
 ## 已完成功能
 
 ### 工作流引擎（`app/services/workflow_engine.py`）
