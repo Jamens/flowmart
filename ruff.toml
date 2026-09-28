@@ -1,0 +1,25 @@
+# Ruff 配置（静态检查 L0：在单测之前拦住低级错误）
+target-version = "py313"
+# 行宽按项目实际基线定：代码里中文注释与长校验逻辑较多，
+# 设太窄（默认 88）会让 E501 泛滥，最后只能靠 noqa 压下去——那就失去意义了。
+line-length = 120
+
+[lint]
+# 基线规则集，刻意克制：
+#   F  未定义名 / 未使用导入 / 明显错误 —— 这是**真能拦住 bug**的部分
+#   E/W pycodestyle 风格
+#   I   导入排序
+# 没开 B(flake8-bugbear) / C90(复杂度) / N(命名) 等：老代码一开就是几十上百条，
+# 要么引发大改、要么整段 noqa，两种结果都比不开更糟。等基线稳定了再逐项加。
+select = ["F", "E", "W", "I"]
+
+[lint.per-file-ignores]
+# 迁移脚本由 alembic autogenerate 生成，风格不由我们控制，改了下次还会被覆盖回来
+"backend/migrations/versions/*.py" = ["E501", "I", "F401", "W291"]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[lint.pycodestyle]
+# 与 line-length 保持一致
+max-line-length = 120

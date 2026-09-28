@@ -10,10 +10,10 @@ import time
 from pathlib import Path
 
 import pytest
+from scripts.cleanup_uploads import cleanup_uploads
 
 from app.core.config import settings
 from app.models.ecommerce import Product
-from scripts.cleanup_uploads import cleanup_uploads
 
 # 结构完整的最小 PNG（与 test_upload.py 同一套约束）
 _IHDR_DATA = (1).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes([8, 6, 0, 0, 0])

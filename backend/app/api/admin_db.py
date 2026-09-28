@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user, require_admin
+from app.core.security import require_admin
 from app.models.ecommerce import User
 
 router = APIRouter(prefix="/admin/db", tags=["db-admin"])

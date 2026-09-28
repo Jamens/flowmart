@@ -91,7 +91,8 @@ def test_revoked_verification_blocks_login(raw_client, db):
     )
     assert c.status_code == 200, c.text
     # 验证后登录成功
-    assert raw_client.post("/api/v1/auth/login", json={"username": "gate_rev", "password": "secret1"}).status_code == 200
+    login = raw_client.post("/api/v1/auth/login", json={"username": "gate_rev", "password": "secret1"})
+    assert login.status_code == 200
     # 撤销验证
     u = db.execute(select(User).where(User.username == "gate_rev")).scalars().first()
     u.email_verified = False

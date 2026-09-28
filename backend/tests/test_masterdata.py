@@ -6,7 +6,6 @@
 3. 删除用户是软删除，不破坏订单外键
 4. 有商品引用的分类不能删除（category_id 非外键，数据库不会兜底）
 """
-import pytest
 
 from app.models.ecommerce import Category, Product, Sku, User
 

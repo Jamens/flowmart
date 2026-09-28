@@ -3,14 +3,13 @@
 核心不变量：已知明文演示密码 123456 只能在 DEBUG（开发）环境回填；
 生产环境（DEBUG=False）绝不能静默写入已知密码，否则空密码存量账户会被统一接管。
 """
-import pytest
+from scripts import init_db
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.core.security import verify_password
 from app.models.ecommerce import User
-from scripts import init_db
 
 
 class _FakeSettings:

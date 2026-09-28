@@ -58,7 +58,7 @@ def _auth(raw_client, token):
 
 
 def test_non_admin_cannot_create_user(raw_client, db):
-    a = _register(raw_client, "rbac1")
+    _register(raw_client, "rbac1")
     h = _auth(raw_client, _login_token(raw_client, "rbac1"))
     r = raw_client.post("/api/v1/users", headers=h, json={"username": "rbac_x"})
     assert r.status_code == 403
@@ -79,7 +79,7 @@ def test_non_admin_cannot_list_users(raw_client, db):
 
 def test_non_admin_cannot_disable_other_user(raw_client, db):
     a = _register(raw_client, "rbacA")
-    b = _register(raw_client, "rbacB")
+    _register(raw_client, "rbacB")
     h = _auth(raw_client, _login_token(raw_client, "rbacB"))
     # 非本人非管理员改/删他人 -> 404（不泄露目标是否存在）
     assert (
@@ -125,7 +125,7 @@ def test_self_can_update_own_profile(raw_client, db):
 
 def test_non_admin_cannot_read_other_profile(raw_client, db):
     a = _register(raw_client, "rbacP1")
-    b = _register(raw_client, "rbacP2")
+    _register(raw_client, "rbacP2")
     h = _auth(raw_client, _login_token(raw_client, "rbacP2"))
     assert raw_client.get(f"/api/v1/users/{a['id']}", headers=h).status_code == 404
 
@@ -182,7 +182,7 @@ def test_buyer_cannot_pay_own_order(raw_client, db, order_flow):
     注意端点已不再是「仅管理员」——买家可对自己订单取消 / 确认收货。
     这里 403 的原因是事件不在 BUYER_ALLOWED_EVENTS 内，而非缺少管理员角色。
     """
-    a = _register(raw_client, "opUser")
+    _register(raw_client, "opUser")
     _verify(db, "opUser")
     h = _auth(raw_client, _login_token(raw_client, "opUser"))
     sku = _make_sku(db)

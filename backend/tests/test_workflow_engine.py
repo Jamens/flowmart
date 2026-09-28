@@ -8,7 +8,7 @@
 import pytest
 
 from app.models.workflow import WorkflowTransitionLog
-from app.services.workflow_engine import WorkflowEngine, WorkflowError
+from app.services.workflow_engine import WorkflowError
 
 
 def test_start_lands_on_start_node(engine, order_flow):

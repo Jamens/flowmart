@@ -6,6 +6,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
 
+
 def _build_engine():
     """按方言差异化建引擎。
 

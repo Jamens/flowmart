@@ -7,12 +7,12 @@
 from datetime import timedelta
 
 import pytest
+from scripts.cleanup_refresh_tokens import cleanup_refresh_tokens, main
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.security import hash_password, utcnow_naive
 from app.models.ecommerce import RefreshToken, User
-from scripts.cleanup_refresh_tokens import cleanup_refresh_tokens, main
 
 
 def _user(db, username):

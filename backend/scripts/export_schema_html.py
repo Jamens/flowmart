@@ -197,9 +197,10 @@ rels.forEach(([a,b]) => {
 });
 Object.entries(pos).forEach(([name,p]) => {
   const cls = p.d === '电商域' ? 'ec' : 'wf';
+  const cols = tables.find(t => t.name === name).columns.length;
   g += `<g><rect class="node ${cls}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="6"/>
     <text class="nt" x="${p.x+12}" y="${p.y+22}">${name}</text>
-    <text class="ns" x="${p.x+p.w-12}" y="${p.y+22}" text-anchor="end">${tables.find(t=>t.name===name).columns.length} 字段</text></g>`;
+    <text class="ns" x="${p.x+p.w-12}" y="${p.y+22}" text-anchor="end">${cols} 字段</text></g>`;
 });
 svg.innerHTML = g;
 

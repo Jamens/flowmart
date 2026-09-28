@@ -212,7 +212,8 @@ def test_list_pagination_returns_total_and_slice(client, sku):
 def test_orders_list_search_and_date_filter(client, sku):
     """订单列表搜索：关键词匹配订单号/商品名；时间范围按 created_at 闭区间过滤。"""
     o1 = client.post("/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]}).json()
-    o2 = client.post("/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]}).json()
+    # 再造一单：确保下面的关键词搜索是「精确命中一单」，而不是「库里总共就只有一单」
+    client.post("/api/v1/orders", json={"items": [{"sku_id": sku.id, "quantity": 1}]})
 
     # 关键词匹配订单号（精确命中那一单）
     r = client.get(f"/api/v1/orders?keyword={o1['order_no']}").json()

@@ -60,12 +60,30 @@ def _seed(eng, stocks):
         ]
         s.add_all(nodes)
         s.add_all([
-            WorkflowTransition(definition_id=definition.id, from_node_key="start", to_node_key="pending_payment", event="submit", priority=10),
-            WorkflowTransition(definition_id=definition.id, from_node_key="pending_payment", to_node_key="paid", event="pay", priority=10),
-            WorkflowTransition(definition_id=definition.id, from_node_key="pending_payment", to_node_key="closed", event="cancel", priority=10),
-            WorkflowTransition(definition_id=definition.id, from_node_key="paid", to_node_key="shipped", event="ship", priority=10),
-            WorkflowTransition(definition_id=definition.id, from_node_key="paid", to_node_key="closed", event="refund", condition_expr="amount < 1000", priority=10),
-            WorkflowTransition(definition_id=definition.id, from_node_key="shipped", to_node_key="completed", event="confirm", priority=10),
+            WorkflowTransition(
+                definition_id=definition.id, from_node_key="start",
+                to_node_key="pending_payment", event="submit", priority=10,
+            ),
+            WorkflowTransition(
+                definition_id=definition.id, from_node_key="pending_payment",
+                to_node_key="paid", event="pay", priority=10,
+            ),
+            WorkflowTransition(
+                definition_id=definition.id, from_node_key="pending_payment",
+                to_node_key="closed", event="cancel", priority=10,
+            ),
+            WorkflowTransition(
+                definition_id=definition.id, from_node_key="paid",
+                to_node_key="shipped", event="ship", priority=10,
+            ),
+            WorkflowTransition(
+                definition_id=definition.id, from_node_key="paid", to_node_key="closed",
+                event="refund", condition_expr="amount < 1000", priority=10,
+            ),
+            WorkflowTransition(
+                definition_id=definition.id, from_node_key="shipped",
+                to_node_key="completed", event="confirm", priority=10,
+            ),
         ])
 
         sku_ids = []

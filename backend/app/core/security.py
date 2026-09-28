@@ -17,7 +17,6 @@ import json
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Any
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer

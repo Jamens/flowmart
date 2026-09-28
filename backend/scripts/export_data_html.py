@@ -114,7 +114,8 @@ h1{margin:0;font-size:18px}.kpi{color:var(--mut);font-size:13px}
 border-radius:6px;cursor:pointer;font-size:13px}
 .tab.on{background:var(--ac);color:#0d1117;border-color:var(--ac);font-weight:600}
 main{padding:20px 26px}
-table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--bd);border-radius:8px;overflow:hidden}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--bd);
+border-radius:8px;overflow:hidden}
 th{background:var(--panel2);text-align:left;padding:9px 12px;font-size:12px;color:var(--mut);font-weight:600}
 td{padding:9px 12px;border-top:1px solid #21262d;font-size:13px}
 tr:hover td{background:#1a2029}
@@ -180,7 +181,8 @@ if(b.x>a.x){x1=a.x+W/2;y1=a.y;x2=b.x-W/2;y2=b.y;c1=x1+45;c2=x2-45;}
 else{x1=a.x-W/2;y1=a.y;x2=b.x+W/2;y2=b.y;c1=x1-45;c2=x2+45;}
 g+=`<path class="e" d="M${x1},${y1} C${c1},${y1} ${c2},${y2} ${x2},${y2}"/>`;
 const mx=(x1+x2)/2,my=(y1+y2)/2-4;
-g+=`<text class="el" x="${mx}" y="${my}" text-anchor="middle">${t.event}${t.condition?' ('+t.condition+')':''}</text>`;});
+const label=t.event+(t.condition?' ('+t.condition+')':'');
+g+=`<text class="el" x="${mx}" y="${my}" text-anchor="middle">${label}</text>`;});
 D.nodes.forEach(n=>{const p=pos[n.key];const hot=(D.load[n.key]>0);
 const cls='n'+(n.type==='start'?' start':n.type==='end'?' end':'')+(hot?' hot':'');
 g+=`<g><rect class="${cls}" x="${p.x-W/2}" y="${p.y-H/2}" width="${W}" height="${H}" rx="7"/>

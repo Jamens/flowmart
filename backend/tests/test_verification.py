@@ -54,7 +54,7 @@ def test_confirm_success_sets_email_verified(client, db):
 
 
 def test_confirm_wrong_code_rejected(client):
-    code = _send(client, "email", "wrong@example.com").json()["dev_code"]
+    _send(client, "email", "wrong@example.com")
     r = _confirm(client, "email", "wrong@example.com", "000000")
     assert r.status_code == 400
     assert "验证码" in r.json()["detail"]

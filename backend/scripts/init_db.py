@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base  # noqa: E402
-from app.core.security import hash_password, ensure_admin_exists  # noqa: E402
+from app.core.security import ensure_admin_exists, hash_password  # noqa: E402
 from app.models import ecommerce, workflow  # noqa: F401,E402  导入即注册表
 from app.models.ecommerce import User  # noqa: E402
 

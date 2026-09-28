@@ -13,9 +13,10 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from scripts.seed import seed_users  # noqa: E402
+
 from app.core.config import Settings, settings  # noqa: E402
 from app.models.ecommerce import User  # noqa: E402
-from scripts.seed import seed_users  # noqa: E402
 
 
 def test_bootstrap_admin_follows_config(db):

@@ -9,7 +9,6 @@ SKU 的改价与调库存更是完全没有入口。本文件锁定这三个新�
 from decimal import Decimal
 
 import pytest
-
 from sqlalchemy import select
 
 from app.core.security import hash_password

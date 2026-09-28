@@ -9,13 +9,12 @@
   不依赖进程内内存或 Redis。
 - 旧码作废：每次申请都会把同用户同渠道同 target 的未消费旧码置为已消费，防重放。
 """
-from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
-from typing import Literal
-
 import hmac
 import re
 import secrets
+from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
+from typing import Literal
 
 from sqlalchemy import func, select
 

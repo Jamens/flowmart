@@ -12,7 +12,6 @@ from app.core.security import (
     verify_password,
 )
 
-
 # ---------------- 底层安全函数 ----------------
 
 
@@ -140,8 +139,10 @@ def test_cross_user_cannot_read_address(raw_client):
     b = raw_client.post("/api/v1/auth/register", json={"username": "userB", "password": "secret1"}).json()
     _verify(raw_client, a["access_token"], "a@example.com")
     _verify(raw_client, b["access_token"], "b@example.com")
-    token_a = raw_client.post("/api/v1/auth/login", json={"username": "userA", "password": "secret1"}).json()["access_token"]
-    token_b = raw_client.post("/api/v1/auth/login", json={"username": "userB", "password": "secret1"}).json()["access_token"]
+    login_a = raw_client.post("/api/v1/auth/login", json={"username": "userA", "password": "secret1"})
+    login_b = raw_client.post("/api/v1/auth/login", json={"username": "userB", "password": "secret1"})
+    token_a = login_a.json()["access_token"]
+    token_b = login_b.json()["access_token"]
     h_a = {"Authorization": f"Bearer {token_a}"}
     h_b = {"Authorization": f"Bearer {token_b}"}
 

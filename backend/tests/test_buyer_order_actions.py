@@ -10,9 +10,8 @@
   2. operator 取自认证身份，body 里伪造无效（否则可污染流转审计轨迹）；
   3. 白名单只管「身份能不能做」，节点合法性仍由引擎判定。
 """
-from sqlalchemy import select
-
 import pytest
+from sqlalchemy import select
 
 from app.core.security import hash_password
 from app.models.ecommerce import Product, Sku, User

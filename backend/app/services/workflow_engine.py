@@ -12,7 +12,7 @@
 from datetime import datetime
 from typing import Any
 
-from simpleeval import EvalWithCompoundTypes, simple_eval
+from simpleeval import simple_eval
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 

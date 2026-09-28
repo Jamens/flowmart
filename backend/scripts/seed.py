@@ -18,9 +18,9 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from sqlalchemy import select  # noqa: E402
 
-from app.core.database import SessionLocal  # noqa: E402
-from app.core.security import hash_password, ensure_admin_exists  # noqa: E402
 from app.core.config import settings  # noqa: E402
+from app.core.database import SessionLocal  # noqa: E402
+from app.core.security import ensure_admin_exists, hash_password  # noqa: E402
 from app.models.ecommerce import (  # noqa: E402
     Address,
     Category,
@@ -33,9 +33,9 @@ from app.models.ecommerce import (  # noqa: E402
 )
 from app.models.workflow import (  # noqa: E402
     WorkflowDefinition,
+    WorkflowInstance,
     WorkflowNode,
     WorkflowTransition,
-    WorkflowInstance,
     WorkflowTransitionLog,
 )
 from app.services.order_service import OrderService  # noqa: E402

@@ -9,7 +9,6 @@
 - 开启 TRUST_PROXY 后 XFF 首跳才生效，可模拟不同客户端 IP；
 - Redis 后端（多实例共享计数）用 fakeredis 离线验证，无需真 Redis 服务。
 """
-import time
 
 import pytest
 
