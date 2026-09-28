@@ -37,11 +37,44 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  migrations:
+    name: 迁移（真实 MySQL）
+    runs-on: ubuntu-latest
+    # 为什么单开一个 job 而不是塞进 backend：它需要真实 MySQL 服务容器。
+    # 更重要的理由是它**证明过能抓到真 bug**——downgrade 在 MySQL 上会失败
+    # （外键依赖索引，不能先 drop_index 再 drop_table），而 SQLite 完全测不出来
+    # （batch 模式重建整表 + 不强制 FK）。只验 SQLite 等于没验生产的迁移路径。
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpw
+          MYSQL_DATABASE: flowmart_mig
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -prootpw"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 升 → 降 → 升（真实 MySQL 上）
+        env:
+          # 指向服务容器；MIG_TEST_URL 由 backend/tests/test_migrations.py 读取
+          MIG_TEST_URL: "mysql+pymysql://root:rootpw@127.0.0.1:3306/flowmart_mig"
+        run: python -m pytest backend/tests/test_migrations.py -q
+
   image:
     name: 镜像构建
     runs-on: ubuntu-latest
-    # 依赖上面两步：早失败早发现，不必等最慢的镜像构建
-    needs: [backend, frontend]
+    # 依赖上面几步：早失败早发现，不必等最慢的镜像构建
+    needs: [backend, frontend, migrations]
     steps:
       - uses: actions/checkout@v4
       - name: 构建部署镜像

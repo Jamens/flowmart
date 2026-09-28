@@ -110,6 +110,9 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
 > （否则下次 autogenerate 又会长回来）。
 > 修复前：`downgrade base` 在 MySQL 上直接失败；修复后：升 → 降 → 升全部通过。
 
+这一步也进了 CI：`.github/workflows/ci.yml` 的 `migrations` job 用 MySQL 服务容器
+自动跑同一件事，所以「改了模型/迁移但只在 SQLite 上验过」会被拦在合并之前。
+
 ## 已完成功能
 
 ### 工作流引擎（`app/services/workflow_engine.py`）
