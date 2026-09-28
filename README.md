@@ -101,6 +101,15 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
 只验 SQLite 会漏掉「某步 ALTER 在 MySQL 上不支持」这类只在发布当天爆炸、
 且那时回滚窗口最窄的问题。
 
+> **已实跑（MySQL 8.0）：发现并修复了一个只在 MySQL 暴露的回滚 bug。**
+> autogenerate 生成的 `downgrade()` 习惯「先 `drop_index` 再 `drop_table`」，
+> 但 MySQL 的 InnoDB 里**外键依赖索引**，外键还在时删索引会被直接拒绝：
+> `Cannot drop index 'ix_refresh_tokens_user_id': needed in a foreign key constraint`。
+> 而 `DROP TABLE` 本来就会连带删掉索引与外键，那几步纯属多余且有害。
+> 三个迁移文件的 `downgrade` 已去掉这些冗余步骤，并在注释里写明原因
+> （否则下次 autogenerate 又会长回来）。
+> 修复前：`downgrade base` 在 MySQL 上直接失败；修复后：升 → 降 → 升全部通过。
+
 ## 已完成功能
 
 ### 工作流引擎（`app/services/workflow_engine.py`）

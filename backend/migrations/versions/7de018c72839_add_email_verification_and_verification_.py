@@ -55,8 +55,7 @@ def downgrade() -> None:
         batch_op.drop_column('email_verified')
         batch_op.drop_column('email')
 
-    with op.batch_alter_table('verification_codes', schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f('ix_verification_codes_user_id'))
-
+    # 不先 drop_index：MySQL 里外键 user_id -> users.id 依赖该索引，
+    # 外键还在时删索引会被拒。DROP TABLE 会连带删掉索引与外键。
     op.drop_table('verification_codes')
     # ### end Alembic commands ###
