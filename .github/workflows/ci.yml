@@ -16,6 +16,11 @@ jobs:
           python-version: '3.13'
       - name: 安装依赖
         run: pip install -r requirements.txt
+      - name: 静态检查（ruff）
+        # 开发工具单独一份：生产镜像不该为一个用不上的 linter 增体积
+        run: |
+          pip install -r requirements-dev.txt
+          ruff check .
       - name: 跑测试
         run: python -m pytest backend/tests -q
 
@@ -30,6 +35,9 @@ jobs:
       - name: 安装依赖（按 lockfile，避免版本漂移）
         working-directory: frontend
         run: npm ci
+      - name: 静态检查（eslint）
+        working-directory: frontend
+        run: npm run lint
       - name: 前端测试（Vitest）
         working-directory: frontend
         run: npm test

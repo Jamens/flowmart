@@ -324,6 +324,32 @@ python backend/scripts/cleanup_uploads.py --dry-run
 > 保留期**不可省略**：上传与保存表单是两次请求，刚传好的图还没挂到商品上，
 > 没有宽限期就会把用户刚上传的封面删掉。
 
+### 静态检查（L0）
+
+在单测之前拦住低级错误：未定义名、未使用导入、拼错变量、超长行、导入未排序。
+
+```bash
+# 后端：ruff
+pip install -r requirements-dev.txt
+ruff check .
+
+# 前端：eslint
+cd frontend && npm run lint
+```
+
+规则**刻意克制**，只开 `F / E / W / I`（ruff）与 `flat/essential`（eslint）：
+老代码一上来就开 B(flake8-bugbear) / C90(复杂度) / N(命名) 会产出几十上百条，
+结果要么引发大改、要么整段 noqa / disable——两种结果都比不开更糟。
+等基线稳定后再逐项加。
+
+行宽按项目实际基线定为 **120**（中文注释与长校验逻辑较多），
+而不是默认 88——设太窄会让 E501 泛滥，最后只能靠 noqa 压下去。
+迁移脚本（`backend/migrations/versions/*.py`）整体豁免：它由 autogenerate 生成，
+风格不受控，改了下次还会被覆盖回来。
+
+`requirements-dev.txt` 与 `requirements.txt` **分开**：生产镜像只装后者，
+不该为一个用不上的 linter 增加体积与攻击面。
+
 ### 接口契约快照
 
 `backend/tests/test_openapi_snapshot.py` 把**接口定义本身**当基准，防止后端改了形状而前端不知情。
@@ -515,5 +541,6 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 图片上传（`POST /api/v1/uploads` 仅管理员；`GET /uploads/{filename}` **不鉴权**，供游客看商品封面）：按「上传口子不能变成任意文件写入跳板」设计——**类型按文件头魔数判定而非信任 Content-Type**（否则一段 HTML 标成 `image/png` 就能存进去，是存储型 XSS 入口）；**文件名自己随机生成、客户端文件名完全不参与**（否则 `../../` 可路径穿越）；限大小（默认 2MB，多读 1 字节判定超限，不必把超大文件整体读进内存）；上传目录已加 `.gitignore`。存本地磁盘 + 静态挂载，换 OSS/S3 只需替换写入逻辑，对外返回的 URL 形状不变。加固项：①**按 Content-Length 在接收前就拦一道**——endpoint 拿到的 file 已是「整个请求体接收并落临时文件之后」的结果，光靠 `read(MAX+1)` 只限制「最终存多少」、限制不了「服务器先收了多少」，磁盘 DoS 得在门口挡；②**魔数之外再查结构**（PNG 须 IHDR 起 / IEND 收、JPEG 须 EOI 收），否则「图片头 + 任意 trailer」会被永久存下并对外可读，等于把安全性押在「下游 Content-Type 永远正确」这个不可验证的假设上；③**原子写**（先 `.part` 再 rename）+ `OSError → 507`，避免写一半失败留下会被 `/uploads` 正常提供的永久坏图；④**启动时校验 `UPLOAD_DIR` 不能指向项目根 / backend**——配错会把 `.env`、源码、数据库在**无任何告警**的情况下匿名公开；⑤响应加 `X-Content-Type-Options: nosniff` 兜底；⑥静态挂载显式 `follow_symlink=False`（改 True 会使穿越防护失效）。**生命周期与配额**：`scripts/cleanup_uploads.py` 清理孤儿图片（未被引**且**超过 24h 保留期——保留期不可省，上传与保存表单是两次请求，否则会删掉用户刚传好还没保存的封面）；配额两层——按 **user_id** 的速率上限（刷上传是最直接的磁盘 DoS）与**总量上限**（默认 512MB，单文件上限挡不住「慢慢攒满磁盘」）
 - [x] 统计看板（后端 `GET /api/v1/stats` 概览 + `/stats/trend` 按天趋势，前端 `StatsView.vue` 指标卡 + 状态分布 + 趋势表，**仅管理员**；刻意**不引入图表库**，Element Plus 无图表，为几张图背一个 echarts 不划算，指标卡 + 表格已经够看）：订单总数 / 状态分布 / **GMV**、商品与 SKU 数 / 库存总量 / 低库存数、活跃用户数、近 N 天订单与销售额。两个刻意的设计：①**只做 SQL 聚合、不把明细读进内存**——订单与商品行数会随时间增长，在 Python 里 `sum()` 迟早拖垮接口；②**GMV 口径是「已支付订单的 pay_amount 之和」**，未支付订单计入订单数但不计入销售额（这条最容易搞错，有专门测试钉死）。低库存阈值做成参数而非写死——不同品类「缺货」标准不同（手机 3 台算紧张、数据线 30 条可能不算）
 - [x] 部署配套（Dockerfile 多阶段构建 + docker-compose + GitHub Actions CI）：前端构建产物打进同一镜像、由后端在 8000 端口一起提供，**同源部署**——前端用相对路径 `/api/v1`，同源即无需 CORS，Cookie 的 Secure/SameSite 也不会因跨站失效，还省掉一整套 nginx 反代与容器内 DNS 解析的坑。镜像以**非 root** 运行并带 HEALTHCHECK；上传目录挂卷（否则容器一删封面全没）；MySQL 映射宿主 3308 避开本机 3306、Redis 不映射宿主端口避免与本机 Redis 冲突。`LOGIN_RATE_LIMIT_REDIS_URL` 默认指向 compose 内的 redis，让限流计数跨实例共享（否则每容器各计各的，把请求打散到不同实例就能绕过限流）。**踩坑**：前端 `Mount("/")` 会按前缀吞掉 `/health`，健康检查必须注册在前端挂载之前，否则 HEALTHCHECK 永远失败、容器被判不健康
+- [x] 静态检查 L0（后端 ruff + 前端 eslint，均接进 CI）：规则**刻意克制**——ruff 只开 `F/E/W/I`、eslint 用 `flat/essential`，老代码一上来开全量规则会产出几十上百条，结果要么大改、要么整段 noqa，两种都比不开更糟。行宽按项目实际基线定 120（非默认 88），否则 E501 泛滥只能靠 noqa 压下去。迁移脚本整体豁免（autogenerate 生成，改了会被覆盖回来）。`requirements-dev.txt` 与生产依赖分开，镜像不装 linter
 - [x] 接口契约快照（`docs/openapi-snapshot.json`，56 个接口）：把**接口定义本身**当基准。单测与端到端都补不上这个洞——它们断言的是「我知道该断言什么」，字段改名后我会同步改断言，照样绿；但前端不是同步改的，要到运行时才炸。只快照**形状**（path / 参数 / 请求体 / 响应 schema），文案类字段不纳入，否则快照会被无脑刷新、测试等于失效。已验证它真能抓到变更（模拟移除统计接口 → 报错并列出差异）
 - [x] 测试（pytest 全量 272 passed；前端 Vitest 8 条）
