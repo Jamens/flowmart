@@ -185,8 +185,9 @@ import { api } from '../api'
 
 // 角色只决定「显示什么」，真正的权限校验永远在后端：
 // 后端对商品写操作是 require_admin，这里隐藏只是避免买家点出一片 403。
-// 供模板直接使用；脚本内需通过 props.isAdmin 引用（直接用 isAdmin 会 ReferenceError）。
-const props = defineProps({
+// 模板里直接用 isAdmin（不需要接收返回值）；脚本内若要引用 isAdmin，
+// 才需要 `const props = defineProps({...})` 再取 props.isAdmin。
+defineProps({
   isAdmin: { type: Boolean, default: false },
 })
 
