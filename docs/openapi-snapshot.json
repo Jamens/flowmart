@@ -1,0 +1,726 @@
+{
+  "DELETE /api/v1/cart/{item_id}": {
+    "params": [
+      [
+        "item_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "DELETE /api/v1/categories/{category_id}": {
+    "params": [
+      [
+        "category_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "DELETE /api/v1/products/{product_id}": {
+    "params": [
+      [
+        "product_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "DELETE /api/v1/users/{user_id}": {
+    "params": [
+      [
+        "user_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "DELETE /api/v1/users/{user_id}/addresses/{address_id}": {
+    "params": [
+      [
+        "address_id",
+        "path",
+        true
+      ],
+      [
+        "user_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "DELETE /api/v1/workflows/definitions/{definition_id}": {
+    "params": [
+      [
+        "definition_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/admin/db/tables": {
+    "params": [],
+    "request": null,
+    "responses": {
+      "200": null
+    }
+  },
+  "GET /api/v1/admin/db/tables/{name}": {
+    "params": [
+      [
+        "limit",
+        "query",
+        false
+      ],
+      [
+        "name",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/auth/me": {
+    "params": [],
+    "request": null,
+    "responses": {
+      "200": null
+    }
+  },
+  "GET /api/v1/cart": {
+    "params": [],
+    "request": null,
+    "responses": {
+      "200": null
+    }
+  },
+  "GET /api/v1/categories": {
+    "params": [
+      [
+        "parent_id",
+        "query",
+        false
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/categories/tree": {
+    "params": [],
+    "request": null,
+    "responses": {
+      "200": null
+    }
+  },
+  "GET /api/v1/orders": {
+    "params": [
+      [
+        "created_from",
+        "query",
+        false
+      ],
+      [
+        "created_to",
+        "query",
+        false
+      ],
+      [
+        "keyword",
+        "query",
+        false
+      ],
+      [
+        "limit",
+        "query",
+        false
+      ],
+      [
+        "offset",
+        "query",
+        false
+      ],
+      [
+        "status",
+        "query",
+        false
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/orders/{order_id}": {
+    "params": [
+      [
+        "order_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/products": {
+    "params": [
+      [
+        "keyword",
+        "query",
+        false
+      ],
+      [
+        "limit",
+        "query",
+        false
+      ],
+      [
+        "offset",
+        "query",
+        false
+      ],
+      [
+        "status",
+        "query",
+        false
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": "#/components/schemas/ProductListOut",
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/products/{product_id}": {
+    "params": [
+      [
+        "product_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": "#/components/schemas/ProductOut",
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/stats": {
+    "params": [
+      [
+        "low_stock_threshold",
+        "query",
+        false
+      ],
+      [
+        "recent_days",
+        "query",
+        false
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/stats/trend": {
+    "params": [
+      [
+        "days",
+        "query",
+        false
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/users": {
+    "params": [
+      [
+        "active_only",
+        "query",
+        false
+      ],
+      [
+        "limit",
+        "query",
+        false
+      ],
+      [
+        "offset",
+        "query",
+        false
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/users/{user_id}": {
+    "params": [
+      [
+        "user_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/users/{user_id}/addresses": {
+    "params": [
+      [
+        "user_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/workflows/definitions": {
+    "params": [
+      [
+        "code",
+        "query",
+        false
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/workflows/definitions/code/{code}": {
+    "params": [
+      [
+        "code",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/workflows/definitions/code/{code}/versions": {
+    "params": [
+      [
+        "code",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /api/v1/workflows/definitions/{definition_id}": {
+    "params": [
+      [
+        "definition_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "GET /health": {
+    "params": [],
+    "request": null,
+    "responses": {
+      "200": "object"
+    }
+  },
+  "PATCH /api/v1/auth/me/password": {
+    "params": [],
+    "request": "#/components/schemas/ChangePasswordIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PATCH /api/v1/cart/{item_id}": {
+    "params": [
+      [
+        "item_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/CartUpdateIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PATCH /api/v1/categories/{category_id}": {
+    "params": [
+      [
+        "category_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/CategoryUpdateIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PATCH /api/v1/products/{product_id}": {
+    "params": [
+      [
+        "product_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/ProductUpdateIn",
+    "responses": {
+      "200": "#/components/schemas/ProductOut",
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PATCH /api/v1/products/{product_id}/shelf": {
+    "params": [
+      [
+        "on_sale",
+        "query",
+        false
+      ],
+      [
+        "product_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PATCH /api/v1/products/{product_id}/skus/{sku_id}": {
+    "params": [
+      [
+        "product_id",
+        "path",
+        true
+      ],
+      [
+        "sku_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/SkuUpdateIn",
+    "responses": {
+      "200": "#/components/schemas/SkuOut",
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PATCH /api/v1/users/{user_id}": {
+    "params": [
+      [
+        "user_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/UserUpdateIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PATCH /api/v1/users/{user_id}/addresses/{address_id}": {
+    "params": [
+      [
+        "address_id",
+        "path",
+        true
+      ],
+      [
+        "user_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/AddressUpdateIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/admin/db/query": {
+    "params": [],
+    "request": "#/components/schemas/QueryIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/auth/login": {
+    "params": [],
+    "request": "#/components/schemas/LoginIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/auth/logout": {
+    "params": [],
+    "request": null,
+    "responses": {
+      "200": null
+    }
+  },
+  "POST /api/v1/auth/password/reset/confirm": {
+    "params": [],
+    "request": "#/components/schemas/PasswordResetConfirmIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/auth/password/reset/send": {
+    "params": [],
+    "request": "#/components/schemas/PasswordResetRequestIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/auth/refresh": {
+    "params": [],
+    "request": null,
+    "responses": {
+      "200": null
+    }
+  },
+  "POST /api/v1/auth/register": {
+    "params": [],
+    "request": "#/components/schemas/RegisterIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/auth/verification/confirm": {
+    "params": [],
+    "request": "#/components/schemas/VerificationConfirmIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/auth/verification/send": {
+    "params": [],
+    "request": "#/components/schemas/VerificationSendIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/cart": {
+    "params": [],
+    "request": "#/components/schemas/CartAddIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/cart/checkout": {
+    "params": [],
+    "request": "#/components/schemas/CheckoutIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/categories": {
+    "params": [],
+    "request": "#/components/schemas/CategoryIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/orders": {
+    "params": [],
+    "request": "#/components/schemas/OrderCreateIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/orders/{order_id}/actions/{event}": {
+    "params": [
+      [
+        "event",
+        "path",
+        true
+      ],
+      [
+        "order_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/ActionIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/products": {
+    "params": [],
+    "request": "#/components/schemas/ProductIn",
+    "responses": {
+      "201": "#/components/schemas/ProductOut",
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/uploads": {
+    "params": [],
+    "request": "#/components/schemas/Body_upload_image_api_v1_uploads_post",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/users": {
+    "params": [],
+    "request": "#/components/schemas/UserIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/users/{user_id}/addresses": {
+    "params": [
+      [
+        "user_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/AddressIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/workflows/definitions": {
+    "params": [],
+    "request": "#/components/schemas/DefinitionIn",
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/workflows/definitions/{definition_id}/publish": {
+    "params": [
+      [
+        "definition_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/workflows/definitions/{definition_id}/versions": {
+    "params": [
+      [
+        "definition_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "201": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "PUT /api/v1/workflows/definitions/{definition_id}": {
+    "params": [
+      [
+        "definition_id",
+        "path",
+        true
+      ]
+    ],
+    "request": "#/components/schemas/DefinitionIn",
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  }
+}
