@@ -29,4 +29,13 @@ describe('api 请求拼装', () => {
     const opts = global.fetch.mock.calls[0][1]
     expect(opts.credentials).toBe('include')
   })
+
+  // 为什么单独钉这一条：买家付不了款的根因就是「走了 actions/pay」——
+  // pay 不在买家白名单，那条路必然 403。前端必须走 /payments 这条专用入口。
+  it('createPayment 走 POST /orders/{id}/payments，而不是 actions/pay', async () => {
+    await api.createPayment(42)
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('/api/v1/orders/42/payments')
+    expect(opts.method).toBe('POST')
+  })
 })

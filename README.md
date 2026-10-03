@@ -226,8 +226,14 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
   拿这个号去渠道后台查是唯一凭据。
 - 支付流水副作用**幂等**：`pay` 的副作用不会重复建流水（有 pending 就置成功、已是 success
   就不动），否则同一订单多条流水会被对账算成收了多次钱——这种错在财务报表上极难发现。
-- **无新增运行时依赖**：RSA 签名复用已为 MySQL `caching_sha2_password` 引入的 `cryptography`，
-  HTTP 复用 `httpx`。
+- **无新增后端运行时依赖**：RSA 签名复用已为 MySQL `caching_sha2_password` 引入的 `cryptography`，
+  HTTP 复用 `httpx`。前端为渲染微信二维码新增了 `qrcode`（本次唯一新增依赖），见下。
+- **前端入口**（`OrdersView.vue` + `api.js`）：订单页「去支付」**仅对本人待付款订单**显示——
+  管理员能看到全站订单，但替别人付款会被后端以 404 拒绝，给入口等于把后端错误甩给用户。
+  点击走 `POST /orders/{id}/payments`，**不是** `actions/pay`（后者买家必然 403）。
+  微信渲染二维码、支付宝新开收银台，两者都**轮询订单状态**等待渠道异步回调的结果
+  （上限 40 次 × 3 秒 ≈ 2 分钟，与二维码有效期同量级，超时提示手动刷新，避免无限轮询）。
+  二维码库用**动态 import** 拆成独立 chunk：走支付宝 / mock 的用户不会加载它。
 
 ### REST API
 
@@ -578,4 +584,5 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 静态检查 L0（后端 ruff + 前端 eslint，均接进 CI）：规则**刻意克制**——ruff 只开 `F/E/W/I`、eslint 用 `flat/essential`，老代码一上来开全量规则会产出几十上百条，结果要么大改、要么整段 noqa，两种都比不开更糟。行宽按项目实际基线定 120（非默认 88），否则 E501 泛滥只能靠 noqa 压下去。迁移脚本整体豁免（autogenerate 生成，改了会被覆盖回来）。`requirements-dev.txt` 与生产依赖分开，镜像不装 linter
 - [x] 接口契约快照（`docs/openapi-snapshot.json`，56 个接口）：把**接口定义本身**当基准。单测与端到端都补不上这个洞——它们断言的是「我知道该断言什么」，字段改名后我会同步改断言，照样绿；但前端不是同步改的，要到运行时才炸。只快照**形状**（path / 参数 / 请求体 / 响应 schema），文案类字段不纳入，否则快照会被无脑刷新、测试等于失效。已验证它真能抓到变更（模拟移除统计接口 → 报错并列出差异）
 - [x] 支付渠道路由（配置驱动可插拔 `PAYMENT_PROVIDER=mock|wechat|alipay`：微信 Native 扫码 / 支付宝电脑网站支付，商户号与密钥全走环境变量且**非 mock 时缺失启动即报错**；**`pay` 事件不进买家白名单**、只由渠道回调以 `system:payment-callback` 身份触发，杜绝「自己把订单标记成已付」的 0 元提货——此前买家下单后只能取消、根本付不了款，购买闭环是断的；回调四道防线：验签（微信 RSA-SHA256 + AES-GCM 解密 / 支付宝 RSA2）、幂等（渠道阶梯重发数小时）、金额比对、无流水不建单；`provider_trade_no` 存渠道交易号供对账；支付流水副作用幂等防同一订单重复记账；复用既有 `cryptography` 与 `httpx`，**零新增依赖**）
-- [x] 测试（pytest 全量 282 passed；前端 Vitest 8 条）
+- [x] 前端支付入口（订单页「去支付」**仅本人待付款订单**可见——管理员可见全站订单但替付会被后端 404 拒绝；点击走 `/payments` 而非 `actions/pay`，后者买家必然 403；微信渲染二维码、支付宝跳收银台，两者均**轮询订单状态**等待渠道异步回调，上限约 2 分钟与二维码有效期同量级；二维码库 `qrcode` 用**动态 import** 拆为独立 chunk，非微信渠道不加载——这是本项目第一个前端新增依赖，理由是微信扫码属硬功能需求）
+- [x] 测试（pytest 全量 282 passed；前端 Vitest 13 条）

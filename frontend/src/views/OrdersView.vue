@@ -45,9 +45,17 @@
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="下单时间" width="180" />
-      <el-table-column label="操作" width="100">
+      <el-table-column label="操作" width="180">
         <template #default="{ row }">
           <el-button size="small" @click="showDetail(row)">详情</el-button>
+          <!-- 去支付只对订单本人显示：管理员能看到全站订单，替别人付款既越权
+               （后端以 404 拒绝）也说不通。 -->
+          <el-button
+            v-if="canPay(row)"
+            size="small"
+            type="primary"
+            @click="startPayment(row)"
+          >去支付</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -151,11 +159,26 @@
         <el-button type="primary" @click="submitCreate">提交</el-button>
       </template>
     </el-dialog>
+
+    <!-- 支付：微信展示二维码、支付宝跳收银台；两种都要轮询等渠道回调的结果 -->
+    <el-dialog v-model="payVisible" title="支付" width="380px" @close="stopPolling">
+      <div v-if="payState === 'qr'" class="qr-box">
+        <img v-if="qrUrl" :src="qrUrl" alt="微信支付二维码" />
+        <p class="tip">请用微信扫码完成支付</p>
+      </div>
+      <div v-else-if="payState === 'redirect'" class="qr-box">
+        <p>已在新窗口打开支付宝收银台，完成付款后本页会自动更新。</p>
+      </div>
+      <p v-if="payState" class="tip">等待支付结果…（已轮询 {{ pollCount }} 次）</p>
+      <template #footer>
+        <el-button @click="payVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 
@@ -195,6 +218,82 @@ const skuOptions = ref([])
 const addresses = ref([])
 const currentUserId = ref(null)
 const form = ref({ sku_id: null, quantity: 1, address_id: null })
+
+// ---- 支付 ----
+const payVisible = ref(false)
+const payState = ref('') // 'qr'（微信扫码）| 'redirect'（支付宝跳转）| ''（未开始）
+const qrUrl = ref('')
+const pollCount = ref(0)
+let pollTimer = null
+
+function canPay(row) {
+  // 只有「待付款」且是本人订单才显示去支付。管理员能看到全站订单，
+  // 但替别人付款会被后端以 404 拒绝（与「订单不存在」同等处理）。
+  return row.status === 'pending_payment' && row.user_id === currentUserId.value
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function startPayment(row) {
+  try {
+    const res = await api.createPayment(row.id)
+    if (res.channel === 'mock') {
+      // mock 渠道发起即成功，无需弹窗与轮询
+      ElMessage.success('支付成功')
+      await load()
+      return
+    }
+    if (res.mode === 'qr') {
+      // 二维码只有微信渠道用得上：动态 import 让走支付宝 / mock 的用户
+      // 根本不加载这段（vite 会把它切成独立 chunk）
+      const QRCode = await import('qrcode')
+      qrUrl.value = await QRCode.toDataURL(res.code_url)
+      payState.value = 'qr'
+    } else {
+      window.open(res.pay_url, '_blank')
+      payState.value = 'redirect'
+    }
+    payVisible.value = true
+    startPolling(row.id)
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+function startPolling(orderId) {
+  // 为什么必须轮询：钱到账是渠道**异步回调**通知后端的，前端无法预知时刻，
+  // 也没有推送通道。上限 40 次 × 3 秒 ≈ 2 分钟，与二维码有效期同量级，
+  // 超时就提示用户手动刷新，避免无限轮询。
+  stopPolling()
+  pollCount.value = 0
+  pollTimer = setInterval(async () => {
+    pollCount.value += 1
+    try {
+      const o = await api.getOrder(orderId)
+      if (o.status !== 'pending_payment') {
+        stopPolling()
+        payVisible.value = false
+        payState.value = ''
+        ElMessage.success('支付成功')
+        await load()
+      } else if (pollCount.value >= 40) {
+        stopPolling()
+        ElMessage.warning('未检测到支付结果，请稍后手动刷新')
+      }
+    } catch {
+      // 轮询中的单次失败不打断（可能只是网络抖动），但连续失败也没意义，
+      // 到次数上限会自然停止
+      stopPolling()
+    }
+  }, 3000)
+}
+
+onUnmounted(stopPolling)
 
 function tagType(s) {
   if (s === 'completed') return 'success'
@@ -327,6 +426,13 @@ h4 {
   color: #8b949e;
   font-size: 12px;
   margin: 6px 0 0;
+}
+.qr-box {
+  text-align: center;
+}
+.qr-box img {
+  width: 220px;
+  height: 220px;
 }
 code {
   background: #1c2230;

@@ -92,6 +92,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload || {}),
     }),
+  // 发起支付。刻意不复用 fireEvent('pay')：pay 不在买家白名单里，
+  // 买家自己调 actions/pay 会被 403 —— 那是防「自己把订单标记成已付」的闸门。
+  createPayment: (orderId) => request(`/orders/${orderId}/payments`, { method: 'POST' }),
 
   // 购物车（归属由后端从令牌取，前端不传 user_id）
   getCart: () => request('/cart'),
