@@ -213,6 +213,13 @@ class Payment(TimestampMixin, Base):
     pay_no: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     channel: Mapped[str] = mapped_column(String(20), nullable=False, default="mock")
+    # 渠道侧交易号（微信 transaction_id / 支付宝 trade_no）。
+    # 为什么必须存：对账只能靠它——我方 pay_no 与渠道流水号是两套编号，
+    # 出现「用户说付了但订单没更新」时，拿这个号去渠道后台查是唯一凭据。
+    # 留空表示尚未收到渠道回调（或 mock 渠道）。
+    provider_trade_no: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     # pending=待支付, success=已支付, failed=失败, refunded=已退款
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     paid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)

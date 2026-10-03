@@ -111,6 +111,36 @@ class Settings(BaseSettings):
     # 验证码发送器：当前仅 "console"（print 到日志，开发可用）；smtp / sms 为可插拔扩展点，未实现时配了会启动报错。
     OTP_SENDER: str = "console"
 
+    # ---- 支付渠道（可插拔，配置驱动）----
+    # 三家渠道共用一套 PaymentProvider 接口（见 app/core/payment.py），切换只改这一项：
+    #   mock   —— 演示/开发：发起支付即视为成功，不接真实渠道（保持既有行为）
+    #   wechat —— 微信支付 v3（Native 扫码）
+    #   alipay —— 支付宝（电脑网站支付）
+    # 之所以做成配置而非代码分支：同一套镜像要能在「本地联调 / 预发 / 生产」之间切换，
+    # 且渠道凭据必须来自环境变量（不能进代码库）。
+    PAYMENT_PROVIDER: str = "mock"
+
+    # 渠道回调的公网基址。真实渠道要把「用户付没付钱」回调给我们，必须是渠道能访问到的
+    # 公网地址（本地 127.0.0.1 渠道回调不到）。非 mock 时必填，否则启动即报错——
+    # 配错它只会在「用户付款后订单迟迟不更新」时才被发现，那时钱已经收了，最难查。
+    PAYMENT_NOTIFY_BASE_URL: str = ""  # 例：https://shop.example.com
+
+    # 微信支付 v3（native 扫码）。注意：JSAPI 需要用户的 openid（得先接公众号/小程序授权），
+    # 本项目暂无微信身份体系，故先只实现 Native——扫码支付不需要 openid。
+    WECHAT_APPID: str = ""
+    WECHAT_MCHID: str = ""  # 商户号
+    WECHAT_API_V3_KEY: str = ""  # APIv3 密钥（32 字节，回调 resource 解密用）
+    WECHAT_MCH_CERT_SERIAL_NO: str = ""  # 商户 API 证书序列号
+    WECHAT_PRIVATE_KEY_PATH: str = ""  # 商户 API 私钥 pem（请求签名用）
+    WECHAT_PLATFORM_CERT_PATH: str = ""  # 微信支付平台证书 pem（回调验签用）
+
+    # 支付宝：电脑网站支付（alipay.trade.page.pay），前端拿到的就是一个跳转 URL
+    ALIPAY_APPID: str = ""
+    ALIPAY_PRIVATE_KEY_PATH: str = ""  # 应用私钥 pem（请求签名用）
+    ALIPAY_PUBLIC_KEY_PATH: str = ""  # 支付宝公钥 pem（回调验签用，不是应用公钥）
+    ALIPAY_SIGN_TYPE: str = "RSA2"
+    ALIPAY_GATEWAY: str = "https://openapi.alipay.com/gateway.do"
+
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306
@@ -152,6 +182,57 @@ class Settings(BaseSettings):
         self.BOOTSTRAP_ADMIN = self.BOOTSTRAP_ADMIN.strip()
         if not self.BOOTSTRAP_ADMIN:
             raise ValueError("BOOTSTRAP_ADMIN 不能为空：必须指定一个初始管理员用户名")
+        return self
+
+    @model_validator(mode="after")
+    def _require_payment_settings(self):
+        """支付渠道配置：非 mock 时凭据必须齐全，启动即报错。
+
+        为什么必须 fail-fast：支付凭据配错（少一个商户号、环境变量名打错）不会在启动时
+        暴露，只会在**用户真的去付款**那一步失败——那时用户已经下单、库存已扣，
+        问题表现为「付不了款」或更糟的「付了款订单没更新」，是线上最难查的一类故障。
+        """
+        self.PAYMENT_PROVIDER = self.PAYMENT_PROVIDER.strip().lower()
+        if self.PAYMENT_PROVIDER not in ("mock", "wechat", "alipay"):
+            raise ValueError(
+                f"PAYMENT_PROVIDER 只能是 mock / wechat / alipay，当前为 {self.PAYMENT_PROVIDER!r}"
+            )
+        if self.PAYMENT_PROVIDER == "mock":
+            return self
+
+        # 回调地址是所有真实渠道的公共前提：渠道要通知我们「钱到了没」
+        self.PAYMENT_NOTIFY_BASE_URL = self.PAYMENT_NOTIFY_BASE_URL.strip().rstrip("/")
+        if not self.PAYMENT_NOTIFY_BASE_URL:
+            raise ValueError(
+                "PAYMENT_PROVIDER 非 mock 时必须配置 PAYMENT_NOTIFY_BASE_URL（渠道回调的公网基址）"
+            )
+        if not self.PAYMENT_NOTIFY_BASE_URL.startswith("https://"):
+            # 回调地址必须 HTTPS：它是「钱到账」的唯一通知路径，走明文会被中间人伪造
+            raise ValueError("PAYMENT_NOTIFY_BASE_URL 必须是 https://（回调是资金通知，不接受明文）")
+
+        required = {
+            "wechat": {
+                "WECHAT_APPID": self.WECHAT_APPID,
+                "WECHAT_MCHID": self.WECHAT_MCHID,
+                "WECHAT_API_V3_KEY": self.WECHAT_API_V3_KEY,
+                "WECHAT_MCH_CERT_SERIAL_NO": self.WECHAT_MCH_CERT_SERIAL_NO,
+                "WECHAT_PRIVATE_KEY_PATH": self.WECHAT_PRIVATE_KEY_PATH,
+                "WECHAT_PLATFORM_CERT_PATH": self.WECHAT_PLATFORM_CERT_PATH,
+            },
+            "alipay": {
+                "ALIPAY_APPID": self.ALIPAY_APPID,
+                "ALIPAY_PRIVATE_KEY_PATH": self.ALIPAY_PRIVATE_KEY_PATH,
+                "ALIPAY_PUBLIC_KEY_PATH": self.ALIPAY_PUBLIC_KEY_PATH,
+            },
+        }[self.PAYMENT_PROVIDER]
+        missing = [k for k, v in required.items() if not str(v).strip()]
+        if missing:
+            raise ValueError(
+                f"PAYMENT_PROVIDER={self.PAYMENT_PROVIDER} 但缺少必需配置：{', '.join(missing)}"
+            )
+        # 密钥文件是否可读留到真正发起支付时再报（见 core/payment.py）：
+        # 容器里证书常由卷挂载，启动那一刻可能还没挂上，这里判存在会把「还没挂好」
+        # 误报成「配错了」，反而更难排查。
         return self
 
     @model_validator(mode="after")

@@ -48,14 +48,45 @@ def sync_order_status(order: Order, instance: WorkflowInstance) -> None:
 # ---------------- 副作用：与社会性无关的数据库操作 ----------------
 
 def _effect_create_payment(svc: "OrderService", order: Order) -> None:
-    """支付成功：记录支付流水。"""
+    """支付成功：记录支付流水。
+
+    **必须幂等**。真实渠道路径下，「发起支付」那一步已写好一条 pending 流水，
+    渠道回调先把它置成 success、再触发本副作用。若这里只看 pending，
+    就会因为「已经被回调置成功了、找不到 pending」而**再建一条**——
+    同一笔订单出现多条支付流水，对账时被算成收了多次钱，
+    这种错在财务报表上极难发现。
+
+    故三种情况分别处理：
+      - 有 pending  → 置成 success（回调直接推进的路径）
+      - 已是 success → 不动（重复回调 / 重复推进）
+      - 都没有      → 新建（管理员手动推进、mock 渠道这类没有「发起」记录的场景）
+    """
+    now = datetime.now()
+    existing = (
+        svc.db.execute(
+            select(Payment)
+            .where(Payment.order_id == order.id, Payment.status.in_(("pending", "success")))
+            .order_by(Payment.id.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        if existing.status == "pending":
+            existing.status = "success"
+        existing.paid_at = existing.paid_at or now
+        order.paid_at = existing.paid_at
+        return
+
+    from app.core.payment import get_payment_provider
+
     payment = Payment(
         order_id=order.id,
         pay_no=_gen_no("PAY"),
         amount=order.pay_amount,
-        channel="mock",
+        channel=get_payment_provider().name,
         status="success",
-        paid_at=datetime.now(),
+        paid_at=now,
     )
     svc.db.add(payment)
     order.paid_at = payment.paid_at

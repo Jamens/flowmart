@@ -635,6 +635,34 @@
       "422": "#/components/schemas/HTTPValidationError"
     }
   },
+  "POST /api/v1/orders/{order_id}/payments": {
+    "params": [
+      [
+        "order_id",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
+  "POST /api/v1/payments/notify/{channel}": {
+    "params": [
+      [
+        "channel",
+        "path",
+        true
+      ]
+    ],
+    "request": null,
+    "responses": {
+      "200": null,
+      "422": "#/components/schemas/HTTPValidationError"
+    }
+  },
   "POST /api/v1/products": {
     "params": [],
     "request": "#/components/schemas/ProductIn",

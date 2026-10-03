@@ -197,6 +197,38 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
   - 每次登录是一条独立 family，多设备 / 多浏览器并存、互不影响。
   - **定期清理**：轮转只增不减，由 `scripts/cleanup_refresh_tokens.py` 清理（建议每天一次 cron）。它**只删两类安全行**——已过期（`expires_at` 已过）和已撤销且超过保留期（默认 30 天）的；**「已轮换但尚未过期」的行必须保留**，否则重放检测会退化：虽然同样返回 401，却拿不到「撤销整条 family」这一更强的处置。
 
+### 支付渠道路由（`app/core/payment.py` + `app/api/payments.py`）
+
+**配置驱动、渠道可插拔**：`PAYMENT_PROVIDER=mock|wechat|alipay`，商户号 / 密钥路径 / 回调基址
+全部来自环境变量，同一套镜像可在「本地联调 / 预发 / 生产」之间切换。
+
+- **非 mock 时凭据缺失启动即报错**（fail-fast）。支付凭据配错（少个商户号、环境变量名打错）
+  不会在启动时暴露，只会在**用户真的去付款**那一步失败——那时库存已扣、钱已收，
+  表现为「付不了款」或更糟的「付了款订单没更新」，是线上最难查的一类故障。
+- **微信只做 Native（扫码）**：JSAPI 需要用户 `openid`，而 openid 只能由公众号 / 小程序授权
+  换来，本项目没有微信身份体系；Native 返回 `code_url` 生成二维码即可，不需要用户身份。
+- **支付宝用电脑网站支付**（`alipay.trade.page.pay`），前端拿到跳转 URL。只有**异步通知**
+  才是可靠的到账依据（同步跳转可被拦截或伪造），推进订单只看异步回调。
+
+**三条铁律**（这段是资金安全，不是代码风格）：
+
+1. **`pay` 事件绝不进 `BUYER_ALLOWED_EVENTS`** —— 那等于允许买家自己把订单标记成已付款
+   而不真付钱（0 元提货）。推进只能由渠道回调以 `system:payment-callback` 身份触发，
+   审计时间线里一眼能区分「用户自己点的」和「渠道回调推的」。
+2. **回调必须验签后才可信**。未验签就采信，等于任何人 POST 一下就能把订单改成已支付。
+   微信走 RSA-SHA256 + `resource` 的 AES-GCM 解密，支付宝走 RSA2。
+3. **回调必须幂等**。渠道收不到成功响应会阶梯重发数小时，不幂等就会重复推进、重复记流水。
+
+回调其余两道防线：**金额比对**（与应收不符一律拒绝——少了说明被篡改，多了说明渠道侧配错，
+都不能默默放行）、**找不到流水不凭空建单**。
+
+- 对账字段 `Payment.provider_trade_no` 存渠道侧交易号：出现「用户说付了但订单没更新」时，
+  拿这个号去渠道后台查是唯一凭据。
+- 支付流水副作用**幂等**：`pay` 的副作用不会重复建流水（有 pending 就置成功、已是 success
+  就不动），否则同一订单多条流水会被对账算成收了多次钱——这种错在财务报表上极难发现。
+- **无新增运行时依赖**：RSA 签名复用已为 MySQL `caching_sha2_password` 引入的 `cryptography`，
+  HTTP 复用 `httpx`。
+
 ### REST API
 
 | 方法 | 路径 | 说明 |
@@ -228,6 +260,8 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
 | PATCH | `/api/v1/cart/{id}` | 修改数量（传 0 表示移除） |
 | DELETE | `/api/v1/cart/{id}` | 移除商品 |
 | POST | `/api/v1/cart/checkout` | 结算购物车（生成订单并清空；**与下单共用验证闸门**，未验证返回 `403`） |
+| POST | `/api/v1/orders/{id}/payments` | 发起支付（**仅订单本人**；`mock` 渠道即成功，真实渠道返回拉起收银台所需参数） |
+| POST | `/api/v1/payments/notify/{channel}` | 支付渠道异步回调（**不鉴权**，安全性完全靠**验签**；通过后以 system 身份推进订单） |
 | GET | `/api/v1/users` | 用户列表（active_only 过滤） |
 
 > **鉴权**：除 `/health` 与 `/auth/login`、`/auth/register`、`/auth/logout`，以及免登录自助入口
@@ -543,4 +577,5 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 部署配套（Dockerfile 多阶段构建 + docker-compose + GitHub Actions CI）：前端构建产物打进同一镜像、由后端在 8000 端口一起提供，**同源部署**——前端用相对路径 `/api/v1`，同源即无需 CORS，Cookie 的 Secure/SameSite 也不会因跨站失效，还省掉一整套 nginx 反代与容器内 DNS 解析的坑。镜像以**非 root** 运行并带 HEALTHCHECK；上传目录挂卷（否则容器一删封面全没）；MySQL 映射宿主 3308 避开本机 3306、Redis 不映射宿主端口避免与本机 Redis 冲突。`LOGIN_RATE_LIMIT_REDIS_URL` 默认指向 compose 内的 redis，让限流计数跨实例共享（否则每容器各计各的，把请求打散到不同实例就能绕过限流）。**踩坑**：前端 `Mount("/")` 会按前缀吞掉 `/health`，健康检查必须注册在前端挂载之前，否则 HEALTHCHECK 永远失败、容器被判不健康
 - [x] 静态检查 L0（后端 ruff + 前端 eslint，均接进 CI）：规则**刻意克制**——ruff 只开 `F/E/W/I`、eslint 用 `flat/essential`，老代码一上来开全量规则会产出几十上百条，结果要么大改、要么整段 noqa，两种都比不开更糟。行宽按项目实际基线定 120（非默认 88），否则 E501 泛滥只能靠 noqa 压下去。迁移脚本整体豁免（autogenerate 生成，改了会被覆盖回来）。`requirements-dev.txt` 与生产依赖分开，镜像不装 linter
 - [x] 接口契约快照（`docs/openapi-snapshot.json`，56 个接口）：把**接口定义本身**当基准。单测与端到端都补不上这个洞——它们断言的是「我知道该断言什么」，字段改名后我会同步改断言，照样绿；但前端不是同步改的，要到运行时才炸。只快照**形状**（path / 参数 / 请求体 / 响应 schema），文案类字段不纳入，否则快照会被无脑刷新、测试等于失效。已验证它真能抓到变更（模拟移除统计接口 → 报错并列出差异）
-- [x] 测试（pytest 全量 272 passed；前端 Vitest 8 条）
+- [x] 支付渠道路由（配置驱动可插拔 `PAYMENT_PROVIDER=mock|wechat|alipay`：微信 Native 扫码 / 支付宝电脑网站支付，商户号与密钥全走环境变量且**非 mock 时缺失启动即报错**；**`pay` 事件不进买家白名单**、只由渠道回调以 `system:payment-callback` 身份触发，杜绝「自己把订单标记成已付」的 0 元提货——此前买家下单后只能取消、根本付不了款，购买闭环是断的；回调四道防线：验签（微信 RSA-SHA256 + AES-GCM 解密 / 支付宝 RSA2）、幂等（渠道阶梯重发数小时）、金额比对、无流水不建单；`provider_trade_no` 存渠道交易号供对账；支付流水副作用幂等防同一订单重复记账；复用既有 `cryptography` 与 `httpx`，**零新增依赖**）
+- [x] 测试（pytest 全量 282 passed；前端 Vitest 8 条）

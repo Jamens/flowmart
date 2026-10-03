@@ -5,7 +5,19 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import admin_db, auth, cart, categories, orders, products, stats, uploads, users, workflows
+from app.api import (
+    admin_db,
+    auth,
+    cart,
+    categories,
+    orders,
+    payments,
+    products,
+    stats,
+    uploads,
+    users,
+    workflows,
+)
 from app.core.config import settings
 
 app = FastAPI(
@@ -35,6 +47,8 @@ app.include_router(admin_db.router, prefix=api)
 app.include_router(auth.router, prefix=api)
 app.include_router(uploads.router, prefix=api)
 app.include_router(stats.router, prefix=api)
+# 支付：发起支付走鉴权，渠道回调无鉴权（安全性靠验签，见 api/payments.py）
+app.include_router(payments.router, prefix=api)
 
 # 上传目录以静态资源挂载：**读取不鉴权**——商品图片需要未登录也能看（商城页）。
 # 上传本身才是管理员操作（见 api/uploads.py 的 require_admin），两者分工不同：
