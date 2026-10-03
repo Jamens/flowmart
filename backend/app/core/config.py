@@ -1,5 +1,6 @@
 """全局配置：所有可变参数集中在此，支持 .env 覆盖。"""
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -153,6 +154,28 @@ class Settings(BaseSettings):
     SMS_SUCCESS_MIN_STATUS: int = 200  # 视为发送成功的 HTTP 状态码区间
     SMS_SUCCESS_MAX_STATUS: int = 299
 
+    # ---- 域名、部署环境、TLS ----
+    # 本项目开源，不替使用者决定部署形态：同源直跑 / 反代后面 / 前后端分域，全靠这几个开关表达。
+    # 单一事实来源是 PUBLIC_BASE_URL，配一次域名尽量复用，别让各处各写一遍。
+    DEPLOY_ENV: str = "dev"  # dev | staging | production（仅标签，出现在 /health 便于区分跑的是哪套）
+    # 站点公网基址，例 https://shop.example.com：
+    #   - 支付回调地址（PAYMENT_NOTIFY_BASE_URL）留空时回退到这里，域名只配一次；
+    #   - ENFORCE_HTTPS / HSTS 的跳转目标也基于它。
+    PUBLIC_BASE_URL: str = ""
+    # Cookie 的 domain 属性：留空 = host-only（同源部署，令牌 Cookie 只发给当前 host）；
+    # 前后端分处不同子域（如 api.example.com 与 shop.example.com）时必须设 ".example.com"，
+    # 否则浏览器不会把令牌 Cookie 随对 api 域的请求带上，登录态在子域间直接失效。
+    COOKIE_DOMAIN: str = ""
+    # 反向代理信任开关（全局，默认 False）：是否可信 X-Forwarded-For / X-Forwarded-Proto。
+    # 仅在「代理已用真实客户端 IP / 真实协议覆写这两个头」时开 True，否则攻击者可伪造 XFF
+    # 绕过限流、或骗过 TLS 判定（详见 ratelimit._client_ip 与 main._is_secure 的注释）。
+    TRUST_PROXY: bool = False
+    # 强制 HTTPS：True 时把非 https 请求 307 跳到 https（基于请求 host 改写 scheme）。
+    # 反代后面**必须同时**开 TRUST_PROXY=True，否则代理转发来的 http 请求会被无限重定向。
+    ENFORCE_HTTPS: bool = False
+    # HSTS：https 响应上加 Strict-Transport-Security（max-age 秒）；0 = 不发。
+    HSTS_MAX_AGE: int = 0  # 生产建议 31536000
+
     # ---- 支付渠道（可插拔，配置驱动）----
     # 三家渠道共用一套 PaymentProvider 接口（见 app/core/payment.py），切换只改这一项：
     #   mock   —— 演示/开发：发起支付即视为成功，不接真实渠道（保持既有行为）
@@ -242,15 +265,19 @@ class Settings(BaseSettings):
         if self.PAYMENT_PROVIDER == "mock":
             return self
 
-        # 回调地址是所有真实渠道的公共前提：渠道要通知我们「钱到了没」
-        self.PAYMENT_NOTIFY_BASE_URL = self.PAYMENT_NOTIFY_BASE_URL.strip().rstrip("/")
-        if not self.PAYMENT_NOTIFY_BASE_URL:
+        # 回调地址是所有真实渠道的公共前提：渠道要通知我们「钱到了没」。
+        # 留空时回退到 PUBLIC_BASE_URL——域名只配一次就够了，不必每个渠道各写一遍。
+        notify = (self.PAYMENT_NOTIFY_BASE_URL or self.PUBLIC_BASE_URL).strip().rstrip("/")
+        if not notify:
             raise ValueError(
-                "PAYMENT_PROVIDER 非 mock 时必须配置 PAYMENT_NOTIFY_BASE_URL（渠道回调的公网基址）"
+                "PAYMENT_PROVIDER 非 mock 时必须配置 PAYMENT_NOTIFY_BASE_URL（或 PUBLIC_BASE_URL）"
+                "作为渠道回调的公网基址"
             )
-        if not self.PAYMENT_NOTIFY_BASE_URL.startswith("https://"):
+        if not notify.startswith("https://"):
             # 回调地址必须 HTTPS：它是「钱到账」的唯一通知路径，走明文会被中间人伪造
-            raise ValueError("PAYMENT_NOTIFY_BASE_URL 必须是 https://（回调是资金通知，不接受明文）")
+            raise ValueError("支付回调地址必须是 https://（回调是资金通知，不接受明文）")
+        # 统一回填，payments.py 直接读 PAYMENT_NOTIFY_BASE_URL
+        self.PAYMENT_NOTIFY_BASE_URL = notify
 
         required = {
             "wechat": {
@@ -283,6 +310,40 @@ class Settings(BaseSettings):
         # 等于没有验证。必须启动即报错，绝不悄悄把验证码交给前端。
         if not self.DEBUG and self.OTP_DEV_RETURN_CODE:
             raise ValueError("生产环境必须 OTP_DEV_RETURN_CODE=False，否则验证码会被明文回传")
+        return self
+
+    @model_validator(mode="after")
+    def _require_deploy_and_tls_settings(self):
+        """域名 / 部署环境 / TLS 的基础校验，配错在启动时报错而不是悄悄裸奔。"""
+        self.DEPLOY_ENV = self.DEPLOY_ENV.strip().lower()
+        if self.DEPLOY_ENV not in ("dev", "staging", "production"):
+            raise ValueError("DEPLOY_ENV 只能是 dev / staging / production")
+
+        self.PUBLIC_BASE_URL = self.PUBLIC_BASE_URL.strip()
+        if self.PUBLIC_BASE_URL:
+            # 统一在此规整，调用方（支付 / 跳转）不必各自再 rstrip
+            self.PUBLIC_BASE_URL = self.PUBLIC_BASE_URL.rstrip("/")
+            if not re.match(r"^https://", self.PUBLIC_BASE_URL):
+                raise ValueError(
+                    "PUBLIC_BASE_URL 必须是 https://（示例 https://shop.example.com）"
+                )
+
+        if self.DEPLOY_ENV == "production" and self.DEBUG:
+            # production 是一个明确的「线上」语义标记，绝不该和调试模式同时出现——
+            # DEBUG 开着意味着堆栈/文档全开、密钥校验全关，用它跑 production 等于把内网直接暴露。
+            raise ValueError("DEPLOY_ENV=production 时必须 DEBUG=False")
+
+        if self.ENFORCE_HTTPS:
+            # 强制 HTTPS 必须配了公网基址；且只有在能识别「真实协议」时才安全——
+            # 反代后不开 TRUST_PROXY，代理转发来的请求 scheme 恒为 http，会无限重定向。
+            if not self.PUBLIC_BASE_URL:
+                raise ValueError("ENFORCE_HTTPS=True 必须配置 PUBLIC_BASE_URL（https）")
+            if not self.TRUST_PROXY:
+                raise ValueError(
+                    "ENFORCE_HTTPS=True 必须同时 TRUST_PROXY=True，否则反代后的 http 请求会无限重定向"
+                )
+        if self.HSTS_MAX_AGE < 0:
+            raise ValueError("HSTS_MAX_AGE 不能为负")
         return self
 
     @model_validator(mode="after")

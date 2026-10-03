@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import (
@@ -35,6 +36,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _is_secure(request: Request) -> bool:
+    """判断请求是否 https，考虑反向代理。
+
+    直连时取 `request.url.scheme`（TLS 真实终止在应用侧）。
+    反代后面（`TRUST_PROXY=True`）时取 `X-Forwarded-Proto`：代理在 TLS 终止点
+    已把真实协议写进该头（Nginx `proxy_set_header X-Forwarded-Proto $scheme`）。
+    不开 `TRUST_PROXY` 时绝不信这个头——否则攻击者给自己塞个
+    `X-Forwarded-Proto: https` 就能骗过 HSTS / 强制 HTTPS 判定。
+    """
+    if settings.TRUST_PROXY:
+        proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+        if proto:
+            return proto == "https"
+    return request.url.scheme == "https"
+
+
+@app.middleware("http")
+async def _tls_enforcement(request: Request, call_next):
+    """HTTPS 强制跳转 + HSTS。
+
+    - `ENFORCE_HTTPS`：非 https 请求 307 跳到同路径的 https 版本（基于请求 host）。
+      反代后**必须**同时 `TRUST_PROXY=True`（启动已校验），否则代理转发来的 http 请求
+      会被无限重定向。
+    - 健康检查 `/health` 跳过跳转：反代内部通常走 http 探活，跳了反而让探针误判失败。
+    - HSTS：https 响应上加 `Strict-Transport-Security`（`HSTS_MAX_AGE>0` 时）。
+    """
+    if settings.ENFORCE_HTTPS and not _is_secure(request) and request.url.path != "/health":
+        https_url = request.url.replace(scheme="https")
+        return RedirectResponse(url=str(https_url), status_code=307)
+    resp = await call_next(request)
+    if settings.HSTS_MAX_AGE > 0 and _is_secure(request):
+        resp.headers["Strict-Transport-Security"] = f"max-age={settings.HSTS_MAX_AGE}; includeSubDomains"
+    return resp
 
 api = settings.API_V1_PREFIX
 app.include_router(products.router, prefix=api)
@@ -92,7 +128,12 @@ async def _upload_security_headers(request: Request, call_next):
 # 容器被判不健康）。同理它也要在 /uploads 挂载之前——不过那个是具体前缀，不冲突。
 @app.get("/health", tags=["system"], summary="健康检查")
 def health() -> dict:
-    return {"status": "ok", "project": settings.PROJECT_NAME, "dialect": settings.dialect}
+    return {
+        "status": "ok",
+        "project": settings.PROJECT_NAME,
+        "dialect": settings.dialect,
+        "deploy_env": settings.DEPLOY_ENV,
+    }
 
 
 # 容器镜像会把前端构建产物放进 FRONTEND_DIST；存在时以根路径提供。

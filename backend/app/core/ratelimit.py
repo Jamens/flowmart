@@ -208,10 +208,12 @@ class LoginRateLimiter:
     @staticmethod
     def _client_ip(request) -> str:
         # 安全默认：直连取 socket 地址（客户端无法伪造）。
-        # 仅当反向代理已用真实客户端 IP 覆写 X-Forwarded-For 且显式开启
-        # LOGIN_RATE_LIMIT_TRUST_PROXY 时，才信任 XFF 首跳——否则攻击者每次伪造不同
-        # XFF 即可绕过限流（code review P1）。
-        if settings.LOGIN_RATE_LIMIT_TRUST_PROXY:
+        # 仅当反向代理已用真实客户端 IP 覆写 X-Forwarded-For 且显式开启代理信任时，
+        # 才信任 XFF 首跳——否则攻击者每次伪造不同 XFF 即可绕过限流（code review P1）。
+        # 代理信任取全局 TRUST_PROXY 与历史遗留的 LOGIN_RATE_LIMIT_TRUST_PROXY 的「任一为真」，
+        # 后者保留只为兼容既有部署（直接删掉会让原本开了 XFF 信任的配置静默失效，
+        # 限流键全塌成代理 IP，进而把全站 429）。
+        if settings.TRUST_PROXY or settings.LOGIN_RATE_LIMIT_TRUST_PROXY:
             forwarded = request.headers.get("x-forwarded-for")
             if forwarded:
                 return forwarded.split(",")[0].strip()

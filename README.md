@@ -214,6 +214,30 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
 且现象是「点了没反应」而非报错。发送器自身也把上游异常统一收敛成 `VerificationError`（502 可重试），
 不让第三方异常原样变成 500 堆栈。
 
+### 域名 / 部署环境 / TLS 可配置（`app/core/config.py` + `app/main.py`）
+
+开源项目不能替使用者决定部署形态：同源直跑、反代后面、还是前后端分域，全靠开关表达。
+单一事实来源是 `PUBLIC_BASE_URL`（配一次域名尽量复用，别让各处各写一遍）。
+
+| 配置项 | 说明 |
+| --- | --- |
+| `DEPLOY_ENV` | `dev` / `staging` / `production`，仅标签，出现在 `/health` 便于区分跑的是哪套；`production` 必须与 `DEBUG=False` 同号（否则启动报错） |
+| `PUBLIC_BASE_URL` | 站点公网基址（`https://shop.example.com`）：支付回调地址留空时回退到它（域名只配一次），也是 HTTPS 跳转目标 |
+| `COOKIE_DOMAIN` | 令牌 Cookie 的 `domain`；留空 = host-only（同源部署）。前后端分处不同子域（如 `api.example.com` 与 `shop.example.com`）时必须设 `.example.com`，否则登录态在子域间失效 |
+| `TRUST_PROXY` | 全局反向代理信任：是否可信 `X-Forwarded-For` / `X-Forwarded-Proto`。仅当代理已用真实 IP / 协议覆写这两个头时开 `True` |
+| `ENFORCE_HTTPS` | `True` 时把非 https 请求 307 跳到 https（基于请求 host）；**反代后必须同时 `TRUST_PROXY=True`**，否则代理转发的 http 会被无限重定向 |
+| `HSTS_MAX_AGE` | >0 时 https 响应加 `Strict-Transport-Security: max-age=...; includeSubDomains`；0 = 不发（生产建议 31536000） |
+
+三个刻意的选择：
+
+1. **协议判定考虑反代**：`_is_secure` 直连取 `request.url.scheme`，`TRUST_PROXY=True` 时改取
+   `X-Forwarded-Proto`。不开 `TRUST_PROXY` 时绝不信这个头——攻击者给自己塞个
+   `X-Forwarded-Proto: https` 就能骗过 HSTS / 强制 HTTPS 判定。
+2. **限流的代理信任跟随全局 `TRUST_PROXY`**（与历史遗留的 `LOGIN_RATE_LIMIT_TRUST_PROXY` 取
+   「任一为真」）。后者保留只为兼容既有部署：直接删会让原本开了 XFF 信任的配置静默失效，
+   限流键全塌成代理 IP，进而把全站 429。两条开关表达同一件事是刻意保留的兼容层。
+3. **`/health` 不参与 HTTPS 跳转**：反代内部通常走 http 探活，跳了反而让探针误判失败。
+
 ### 找回密码与修改密码（`app/api/auth.py` + `app/core/verification.py`）
 
 - **找回密码（无需旧密码）**：`POST /auth/password/reset/send` 对**已验证**的邮箱/手机申请验证码，`POST /auth/password/reset/confirm` 凭码设置新密码。面向「忘记密码」以及生产环境被空密码告警拦住的账号——这类用户本来就登不进系统、拿不出旧密码，身份由「用户名 + 控制已验证联系方式（OTP 证明）」承担。
@@ -536,6 +560,8 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
   都能完成任意账号的验证，验证形同虚设。配了 `smtp` / `webhook` 却缺连接参数同样启动报错。
   唯一例外是**端到端验收**：`e2e_acceptance.py` 直接从库里读验证码、没有真实渠道，
   此时显式设 `OTP_ALLOW_CONSOLE_IN_PROD=true`，别的地方一律保持 `False`。
+- `DEPLOY_ENV=production` 必须与 `DEBUG=False` 同号：production 是明确的「线上」语义标记，
+  绝不能和开着调试（`DEBUG=True`，堆栈 / 文档全开、密钥校验全关）同时出现。
 
 > 本地用 HTTP 调试时若浏览器不接受 Secure Cookie，可临时 `DEBUG=true`，
 > 但那会**同时跳过上述全部校验**，仅限开发。
@@ -625,4 +651,5 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 支付渠道路由（配置驱动可插拔 `PAYMENT_PROVIDER=mock|wechat|alipay`：微信 Native 扫码 / 支付宝电脑网站支付，商户号与密钥全走环境变量且**非 mock 时缺失启动即报错**；**`pay` 事件不进买家白名单**、只由渠道回调以 `system:payment-callback` 身份触发，杜绝「自己把订单标记成已付」的 0 元提货——此前买家下单后只能取消、根本付不了款，购买闭环是断的；回调四道防线：验签（微信 RSA-SHA256 + AES-GCM 解密 / 支付宝 RSA2）、幂等（渠道阶梯重发数小时）、金额比对、无流水不建单；`provider_trade_no` 存渠道交易号供对账；支付流水副作用幂等防同一订单重复记账；复用既有 `cryptography` 与 `httpx`，**零新增依赖**）
 - [x] 前端支付入口（订单页「去支付」**仅本人待付款订单**可见——管理员可见全站订单但替付会被后端 404 拒绝；点击走 `/payments` 而非 `actions/pay`，后者买家必然 403；微信渲染二维码、支付宝跳收银台，两者均**轮询订单状态**等待渠道异步回调，上限约 2 分钟与二维码有效期同量级；二维码库 `qrcode` 用**动态 import** 拆为独立 chunk，非微信渠道不加载——这是本项目第一个前端新增依赖，理由是微信扫码属硬功能需求）
 - [x] 通知渠道可配置（`OTP_SENDER` 全局 + `OTP_EMAIL_SENDER` / `OTP_SMS_SENDER` 分渠道：邮件走标准库 `smtplib` **零新增依赖**、短信走**通用 HTTP 网关**（`{target}/{code}/{ttl}` 占位符模板，可指向厂商也可指向自建转发服务），刻意**不内置任何厂商 SDK**——开源项目不替使用者选厂商；默认 `console` 保证 clone 下来**零凭据**可跑通注册验证，但生产启动校验拒绝任何渠道落到 console；外呼一律带超时，发送失败整段回滚不占重发配额，上游异常统一收敛为 502）
-- [x] 测试（pytest 全量 301 passed；前端 Vitest 13 条）
+- [x] 域名 / 部署环境 / TLS 可配置（`PUBLIC_BASE_URL` 单一事实来源：支付回调地址留空时回退到它，域名只配一次；`DEPLOY_ENV` 标签进 `/health` 且与 `DEBUG` 强一致；`COOKIE_DOMAIN` 支持前后端分域部署；全局 `TRUST_PROXY` 信任 `X-Forwarded-For/Proto`，限流同时跟随该开关；`ENFORCE_HTTPS` 强制跳转 + `HSTS_MAX_AGE` 发 `Strict-Transport-Security`，两者均配错即启动报错，且协议判定区分直连与反代避免被伪造 `X-Forwarded-Proto` 骗过）
+- [x] 测试（pytest 全量 315 passed；前端 Vitest 13 条）

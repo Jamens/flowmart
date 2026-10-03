@@ -71,6 +71,18 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       SMS_WEBHOOK_URL: ${SMS_WEBHOOK_URL:-}
       OTP_ALLOW_CONSOLE_IN_PROD: ${OTP_ALLOW_CONSOLE_IN_PROD:-false}
+      # ---- 域名 / 部署环境 / TLS ----
+      # PUBLIC_BASE_URL 是公网基址单一事实来源：支付回调地址留空时回退到这里。
+      # 没配好（且没设 PAYMENT_NOTIFY_BASE_URL）启动会报错——宁可起不来，别让线上顶着 localhost 跑。
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      DEPLOY_ENV: ${DEPLOY_ENV:-production}
+      # 前后端分域部署时才需要，否则留空（同源部署 host-only Cookie 即可）
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      # 反向代理已用真实 IP / 协议覆写 X-Forwarded-* 头时才开 true；直连必须 false
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      # 强制 HTTPS 跳转：仅在「容器直接终止 TLS」时用，且必须同时 TRUST_PROXY=true
+      ENFORCE_HTTPS: ${ENFORCE_HTTPS:-false}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
       # ---- 数据库 ----
       DB_DIALECT: mysql
       DB_HOST: mysql

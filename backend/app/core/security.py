@@ -171,6 +171,7 @@ def set_auth_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=settings.COOKIE_SECURE,
         samesite=settings.COOKIE_SAMESITE,
+        domain=settings.COOKIE_DOMAIN or None,  # 前后端分域时设为 .example.com
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
@@ -178,7 +179,7 @@ def set_auth_cookie(response: Response, token: str) -> None:
 def clear_auth_cookie(response: Response) -> None:
     """退出登录：清除 httpOnly Cookie（前端 JS 无法删，必须由后端发指令）。
 
-    必须与 set_auth_cookie 的 secure/samesite 保持一致：否则生产环境
+    必须与 set_auth_cookie 的 secure/samesite/domain 保持一致：否则生产环境
     （COOKIE_SECURE=True、samesite=lax）下浏览器因属性不匹配而清不掉 Cookie，
     导致「退出登录」形同虚设。
     """
@@ -187,6 +188,7 @@ def clear_auth_cookie(response: Response) -> None:
         secure=settings.COOKIE_SECURE,
         httponly=True,
         samesite=settings.COOKIE_SAMESITE,
+        domain=settings.COOKIE_DOMAIN or None,
     )
 
 
@@ -198,6 +200,7 @@ def set_refresh_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=settings.COOKIE_SECURE,
         samesite=settings.COOKIE_SAMESITE,
+        domain=settings.COOKIE_DOMAIN or None,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
@@ -209,6 +212,7 @@ def clear_refresh_cookie(response: Response) -> None:
         secure=settings.COOKIE_SECURE,
         httponly=True,
         samesite=settings.COOKIE_SAMESITE,
+        domain=settings.COOKIE_DOMAIN or None,
     )
 
 
