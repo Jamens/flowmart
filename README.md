@@ -173,13 +173,46 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
 - 两步式：`POST /auth/verification/send` 申请一次性 OTP，`POST /auth/verification/confirm` 确认；确认成功后把 target 绑定到账号并置对应渠道的 `*_verified=True`。
 - 验证码用 `secrets` 生成（密码学随机，非 `random`）；确认用 `hmac.compare_digest` 常量时间比对，防时序侧信道。
 - **防爆破**：单个验证码的确认尝试超过 `OTP_CONFIRM_MAX_ATTEMPTS`（默认 5）即锁定该码（置 `consumed_at`），避免对 6 位码暴力枚举；重发本身另有窗口限流。
-- **可插拔发送器**：`VerificationSender` ABC + `ConsoleSender`（开发期打印到日志）；`smtp` / `sms` 是预留扩展点，未实现时配了会启动即报错（fail-fast）。
+- **可插拔发送器（配置驱动）**：`VerificationSender` ABC + `ConsoleSender` / `SmtpSender` / `WebhookSmsSender`，
+  邮件与短信**各自独立**选择（`OTP_EMAIL_SENDER` / `OTP_SMS_SENDER`，留空跟随全局 `OTP_SENDER`）。
+  默认 `console`，零凭据即可跑通；配了真实发送器却缺连接参数会**启动即报错**。详见下方专节。
 - **重发限流基于 DB**（同一用户对同一渠道在时间窗内最多 N 次），天然多实例安全，不依赖进程内内存或 Redis；每次申请都会作废同渠道同 target 的未消费旧码，防重放。
 - **开发便利开关**：`OTP_DEV_RETURN_CODE=True`（默认）时 `send` 接口在响应里回传 `dev_code`，便于联调与测试；生产**必须 False**，配置校验会强制（`DEBUG=False` 下仍为 True 即启动报错）。
 - 模型新增 `User.email` / `email_verified` / `phone_verified` 三列，并新建 `verification_codes` 表；已生成 Alembic 迁移（与 `alembic check` 守卫一致）。注册接口支持可选 `email`。
 - **下单强约束（已落地）**：`POST /api/v1/orders` 与 `POST /api/v1/cart/checkout` **共用同一依赖 `require_verified_contact`**（单一事实来源，杜绝绕过），在 API 层校验「当前用户已验证邮箱或手机**至少其一**」，否则返回 `403`（detail 指引先走 send/confirm）。**服务层 `OrderService.create_order` 不受限**——后台运营/迁移等直接调用路径不应被账户合规约束拦截；验证状态取运行时实时值，撤销验证后会被重新拦截。
 - **登录强约束（已落地）**：`POST /api/v1/auth/login` 校验「已验证邮箱或手机**至少其一**」，否则返回 `403`（detail 指引先走验证），与下单闸门同源——未验证账号无法进入系统。为避免把存量未验证用户（含初始管理员 `BOOTSTRAP_ADMIN`）永久锁死，`seed.py` / `init_db._backfill_admin` 已把演示/初始管理员置为 `email_verified=True`；真实用户走下方自助验证即可登录。
 - **验证入口允许未登录自助**：`/auth/verification/send` 与 `/confirm` 改用 `get_optional_current_user` + 账号密码自证（`_resolve_verification_user`）——已登录走令牌，未登录在登录前凭 `username`/`password` 自证身份也能申请并确认验证码。否则未验证用户会陷入「验证要令牌 → 没令牌登录被拦 → 永远无法验证」的死锁。
+
+### 通知渠道可配置（`app/core/verification.py`）
+
+本项目是**开源**的，通知这块只定义「怎么连出去」，**不替使用者选厂商**，账号全部由部署者用环境变量填。
+邮件与短信各自独立可配，否则没法「邮件走 SMTP、短信走网关」：
+
+| 配置项 | 说明 |
+| --- | --- |
+| `OTP_SENDER` | 全局默认：`console` / `smtp` / `webhook`，默认 `console` |
+| `OTP_EMAIL_SENDER` | 邮件渠道覆盖：留空跟随全局，可选 `console` / `smtp` |
+| `OTP_SMS_SENDER` | 短信渠道覆盖：留空跟随全局，可选 `console` / `webhook` |
+| `SMTP_*` | `HOST` / `PORT`(587) / `USER` / `PASSWORD` / `FROM` / `STARTTLS` / `USE_SSL`(465) / `TIMEOUT` |
+| `SMS_WEBHOOK_*` | `URL` / `METHOD` / `BODY` / `HEADERS` / `TIMEOUT` / `SUCCESS_MIN_STATUS`~`MAX_STATUS` |
+
+三个刻意的选择：
+
+1. **默认 `console`，零凭据可跑**。clone 下来第一次 `python -m uvicorn` 不该被「先去申请短信服务」卡住，
+   注册 / 验证全链路就能走通（验证码打在日志里）。代价是生产**不允许**有渠道落到 `console`——
+   见「生产环境启动校验」。
+2. **邮件用标准库 `smtplib`，零新增依赖**。任何 SMTP 服务商都能连，不需要各家 SDK。
+   外呼一律带 `SMTP_TIMEOUT`（默认 10 秒）：SMTP 是同步阻塞调用，不设超时会让上游一次抖动
+   把请求线程全部挂住。465 用 SSL 直连、587 用 STARTTLS，两者互斥，配了会启动报错。
+3. **短信用通用 HTTP 网关，不内置任何厂商 SDK**。各家签名算法不同且会变，内置等于替使用者选厂商，
+   还要把他们的包变成运行时依赖。改为把网关地址配上即可——它可以是厂商网关，也可以是自建的
+   一小段转发服务（想接谁就接谁）。报文模板用 `{target}` / `{code}` / `{ttl}` 占位符描述，
+   `POST` 时整体作请求体（通常配成 JSON）、`GET` 时按 query string 解析成查询参数。
+
+**发送失败要回滚**：`request_code` 改成「先发送、后落库」，渠道挂掉时整段回滚并转 `502`——
+否则这条用户根本没收到的码会占掉重发配额，上游一挂用户就被自己的限流锁死，
+且现象是「点了没反应」而非报错。发送器自身也把上游异常统一收敛成 `VerificationError`（502 可重试），
+不让第三方异常原样变成 500 堆栈。
 
 ### 找回密码与修改密码（`app/api/auth.py` + `app/core/verification.py`）
 
@@ -465,7 +498,7 @@ docs/            表结构与数据可视化页面（由脚本生成）
 由后端在 8000 端口一起提供——**同源部署**：不需要配 CORS，Cookie 的 Secure / SameSite 也不会因跨站失效。
 
 ```bash
-cp .env.example .env        # 至少改 SECRET_KEY 与两个密码
+cp .env.example .env        # 至少改 SECRET_KEY、两个密码，以及验证码投递（邮件 / 短信）
 docker compose up -d --build
 docker compose run --rm backend python scripts/init_db.py   # 首次建表
 docker compose run --rm backend python scripts/seed.py      # 灌演示数据（可选）
@@ -482,6 +515,7 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 | MySQL 映射宿主 3308 | 避开本机可能已占用的 3306 |
 | Redis 不映射宿主端口 | 限流计数只在 compose 网络内用，避免与本机已装的 Redis（6379）冲突；想用本机 Redis 就把 `LOGIN_RATE_LIMIT_REDIS_URL` 改成 `redis://host.docker.internal:6379/0` |
 | 镜像内以非 root 运行 | 即便容器被攻破，拿到的也只是低权限用户 |
+| 验证码投递**不给可用默认值** | compose 里 `SMTP_HOST` / `SMS_WEBHOOK_URL` 默认为空，没配好就起不来（启动校验直接拦下）。给个占位地址让容器正常起来、用户却永远收不到码，比起不来更糟——那种故障要到「用户注册到一半」才被发现 |
 
 ### Redis 与限流
 
@@ -497,6 +531,11 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - `COOKIE_SECURE` 必须为 `True`（否则会话 Cookie 经明文 HTTP 泄露）
 - `OTP_DEV_RETURN_CODE` 必须为 `False`（否则验证码被明文回传给前端，等于没有验证）
 - `BOOTSTRAP_ADMIN` 不能为空（否则谁都不是管理员，系统静默锁死）
+- **验证码投递不能有渠道落到 `console`**（`OTP_SENDER` / `OTP_EMAIL_SENDER` / `OTP_SMS_SENDER`）：
+  生产用 console 意味着验证码只打进服务端日志——用户永远收不到，而任何能看日志的人
+  都能完成任意账号的验证，验证形同虚设。配了 `smtp` / `webhook` 却缺连接参数同样启动报错。
+  唯一例外是**端到端验收**：`e2e_acceptance.py` 直接从库里读验证码、没有真实渠道，
+  此时显式设 `OTP_ALLOW_CONSOLE_IN_PROD=true`，别的地方一律保持 `False`。
 
 > 本地用 HTTP 调试时若浏览器不接受 Secure Cookie，可临时 `DEBUG=true`，
 > 但那会**同时跳过上述全部校验**，仅限开发。
@@ -585,4 +624,5 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 接口契约快照（`docs/openapi-snapshot.json`，56 个接口）：把**接口定义本身**当基准。单测与端到端都补不上这个洞——它们断言的是「我知道该断言什么」，字段改名后我会同步改断言，照样绿；但前端不是同步改的，要到运行时才炸。只快照**形状**（path / 参数 / 请求体 / 响应 schema），文案类字段不纳入，否则快照会被无脑刷新、测试等于失效。已验证它真能抓到变更（模拟移除统计接口 → 报错并列出差异）
 - [x] 支付渠道路由（配置驱动可插拔 `PAYMENT_PROVIDER=mock|wechat|alipay`：微信 Native 扫码 / 支付宝电脑网站支付，商户号与密钥全走环境变量且**非 mock 时缺失启动即报错**；**`pay` 事件不进买家白名单**、只由渠道回调以 `system:payment-callback` 身份触发，杜绝「自己把订单标记成已付」的 0 元提货——此前买家下单后只能取消、根本付不了款，购买闭环是断的；回调四道防线：验签（微信 RSA-SHA256 + AES-GCM 解密 / 支付宝 RSA2）、幂等（渠道阶梯重发数小时）、金额比对、无流水不建单；`provider_trade_no` 存渠道交易号供对账；支付流水副作用幂等防同一订单重复记账；复用既有 `cryptography` 与 `httpx`，**零新增依赖**）
 - [x] 前端支付入口（订单页「去支付」**仅本人待付款订单**可见——管理员可见全站订单但替付会被后端 404 拒绝；点击走 `/payments` 而非 `actions/pay`，后者买家必然 403；微信渲染二维码、支付宝跳收银台，两者均**轮询订单状态**等待渠道异步回调，上限约 2 分钟与二维码有效期同量级；二维码库 `qrcode` 用**动态 import** 拆为独立 chunk，非微信渠道不加载——这是本项目第一个前端新增依赖，理由是微信扫码属硬功能需求）
-- [x] 测试（pytest 全量 282 passed；前端 Vitest 13 条）
+- [x] 通知渠道可配置（`OTP_SENDER` 全局 + `OTP_EMAIL_SENDER` / `OTP_SMS_SENDER` 分渠道：邮件走标准库 `smtplib` **零新增依赖**、短信走**通用 HTTP 网关**（`{target}/{code}/{ttl}` 占位符模板，可指向厂商也可指向自建转发服务），刻意**不内置任何厂商 SDK**——开源项目不替使用者选厂商；默认 `console` 保证 clone 下来**零凭据**可跑通注册验证，但生产启动校验拒绝任何渠道落到 console；外呼一律带超时，发送失败整段回滚不占重发配额，上游异常统一收敛为 502）
+- [x] 测试（pytest 全量 301 passed；前端 Vitest 13 条）

@@ -55,6 +55,22 @@ services:
       COOKIE_SECURE: "true"
       OTP_DEV_RETURN_CODE: "false"
       BOOTSTRAP_ADMIN: ${BOOTSTRAP_ADMIN:-zhangsan}
+      # ---- 验证码投递（邮件 / 短信）----
+      # 生产不允许任何渠道落到 console：验证码只进日志 = 用户收不到，且看日志的人能冒用账号。
+      # 因此这里**刻意不给可用的默认值**——没配好就起不来（启动校验直接拦下），
+      # 好过给个占位地址让容器正常起来、用户却永远收不到码。
+      # 接哪家由你自己定（本项目不绑厂商）：邮件填 SMTP_*，短信填 SMS_WEBHOOK_*，见 .env.example。
+      # 端到端验收例外：设 OTP_ALLOW_CONSOLE_IN_PROD=true 且两个渠道都设为 console
+      # （e2e_acceptance.py 是从库里读验证码的，不需要真实渠道）。
+      OTP_EMAIL_SENDER: ${OTP_EMAIL_SENDER:-smtp}
+      OTP_SMS_SENDER: ${OTP_SMS_SENDER:-webhook}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMS_WEBHOOK_URL: ${SMS_WEBHOOK_URL:-}
+      OTP_ALLOW_CONSOLE_IN_PROD: ${OTP_ALLOW_CONSOLE_IN_PROD:-false}
       # ---- 数据库 ----
       DB_DIALECT: mysql
       DB_HOST: mysql

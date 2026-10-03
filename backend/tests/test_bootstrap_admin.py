@@ -92,4 +92,10 @@ def test_cookie_secure_ok_when_true_in_prod(monkeypatch):
     monkeypatch.setenv("COOKIE_SECURE", "True")
     monkeypatch.setenv("SECRET_KEY", "prod-strong-secret-not-dev-default-1234567890")
     monkeypatch.setenv("OTP_DEV_RETURN_CODE", "False")  # 生产必须关掉验证码明文回传
+    # 生产还不允许有渠道落到 console 发送器（验证码只进日志 = 用户收不到且可被冒用）
+    monkeypatch.setenv("OTP_EMAIL_SENDER", "smtp")
+    monkeypatch.setenv("OTP_SMS_SENDER", "webhook")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_FROM", "no-reply@example.com")
+    monkeypatch.setenv("SMS_WEBHOOK_URL", "https://sms.example.com/send")
     Settings()  # 不抛即为通过

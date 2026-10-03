@@ -183,5 +183,11 @@ def test_secret_key_guard_blocks_default_in_prod():
         SECRET_KEY="a-strong-random-prod-secret-at-least-32-chars",
         COOKIE_SECURE=True,
         OTP_DEV_RETURN_CODE=False,  # 生产必须关掉验证码明文回传
+        # 生产同样不允许有渠道落到 console 发送器（验证码只进日志 = 用户收不到且可被冒用）
+        OTP_EMAIL_SENDER="smtp",
+        OTP_SMS_SENDER="webhook",
+        SMTP_HOST="smtp.example.com",
+        SMTP_FROM="no-reply@example.com",
+        SMS_WEBHOOK_URL="https://sms.example.com/send",
     )
     assert s.SECRET_KEY == "a-strong-random-prod-secret-at-least-32-chars"

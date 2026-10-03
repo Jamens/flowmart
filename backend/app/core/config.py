@@ -1,4 +1,5 @@
 """全局配置：所有可变参数集中在此，支持 .env 覆盖。"""
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -108,8 +109,49 @@ class Settings(BaseSettings):
     OTP_CONFIRM_MAX_ATTEMPTS: int = 5
     # 发送接口是否把验证码直接回传（仅开发便利）。生产必须 False，否则等于把验证码明文交给客户端。
     OTP_DEV_RETURN_CODE: bool = True
-    # 验证码发送器：当前仅 "console"（print 到日志，开发可用）；smtp / sms 为可插拔扩展点，未实现时配了会启动报错。
-    OTP_SENDER: str = "console"
+    # ---- 通知渠道（验证码投递）：可插拔 + 配置驱动 ----
+    # 本项目是**开源**的，不能替使用者选厂商：这里只定义「怎么连出去」，账号全部由
+    # 部署者用环境变量填。默认 console（打印到日志），保证 clone 下来**零凭据**就能
+    # 跑通注册 / 验证流程——任何人第一次试用都不该被卡在「先去申请短信服务」上。
+    #
+    # 邮件与短信**各自独立**可配（否则没法同时「邮件走 SMTP、短信走网关」）：
+    #   全局默认 OTP_SENDER，单渠道可用 OTP_EMAIL_SENDER / OTP_SMS_SENDER 覆盖。
+    OTP_SENDER: str = "console"  # console | smtp | webhook
+    OTP_EMAIL_SENDER: str = ""  # 留空跟随 OTP_SENDER；可选 console | smtp
+    OTP_SMS_SENDER: str = ""  # 留空跟随 OTP_SENDER；可选 console | webhook
+    # 生产（DEBUG=false）允许渠道落到 console 的**唯一**情形：端到端验收。
+    # 验收脚本是从库里读验证码的（见 e2e_acceptance.py），并没有真实渠道可配；
+    # 除此之外一律保持 False——console 在生产意味着验证码只进日志，用户收不到，
+    # 而任何能看日志的人都能完成任意账号的验证。
+    OTP_ALLOW_CONSOLE_IN_PROD: bool = False
+
+    # 邮件（SMTP）：用标准库 smtplib 实现，**零新增依赖**，任何 SMTP 服务商都能连。
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587  # 587=STARTTLS，465=SSL
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""  # 发件人；留空回退到 SMTP_USER
+    SMTP_STARTTLS: bool = True  # 587 端口用
+    SMTP_USE_SSL: bool = False  # 465 端口用（与 STARTTLS 互斥）
+    # SMTP 是**同步阻塞**调用：不设超时，上游一抖动就会把请求线程全部挂住直到打满 worker。
+    # 外呼必须有超时，这是依赖外部服务的底线。
+    SMTP_TIMEOUT: int = 10  # 秒
+
+    # 短信：**通用 HTTP 网关**，刻意不内置任何一家厂商的 SDK。
+    # 理由：各家签名算法不同且会变，内置等于替使用者选厂商，并把他们的 SDK 变成
+    # 本项目的运行时依赖（与「不为用不上的东西引依赖」冲突）。
+    # 改为把网关地址配上即可——它可以是厂商网关，也可以是自建的一小段转发服务。
+    # 报文模板用 {target} / {code} / {ttl} 占位符描述，适配任何字段命名。
+    SMS_WEBHOOK_URL: str = ""
+    SMS_WEBHOOK_METHOD: str = "POST"  # POST | GET
+    SMS_WEBHOOK_BODY: str = '{"to":"{target}","text":"您的验证码是 {code}，{ttl} 秒内有效"}'
+    # 额外请求头，JSON 对象字符串，如 {"Authorization":"Bearer xxx"}；留空不加。
+    # 默认已带 Content-Type: application/json；模板若写成表单（a=1&b=2），
+    # 用这里覆盖成 {"Content-Type":"application/x-www-form-urlencoded"}。
+    SMS_WEBHOOK_HEADERS: str = ""
+    SMS_WEBHOOK_TIMEOUT: int = 10
+    SMS_SUCCESS_MIN_STATUS: int = 200  # 视为发送成功的 HTTP 状态码区间
+    SMS_SUCCESS_MAX_STATUS: int = 299
 
     # ---- 支付渠道（可插拔，配置驱动）----
     # 三家渠道共用一套 PaymentProvider 接口（见 app/core/payment.py），切换只改这一项：
@@ -241,6 +283,83 @@ class Settings(BaseSettings):
         # 等于没有验证。必须启动即报错，绝不悄悄把验证码交给前端。
         if not self.DEBUG and self.OTP_DEV_RETURN_CODE:
             raise ValueError("生产环境必须 OTP_DEV_RETURN_CODE=False，否则验证码会被明文回传")
+        return self
+
+    @model_validator(mode="after")
+    def _require_notification_settings(self):
+        """通知渠道配置：选了某个发送器，它的连接参数就必须齐——启动即报错。
+
+        与支付同一套理由：这类配置错不会在启动时暴露，而是在**用户注册到一半收不到码**
+        时才炸，且现象是「接口 200、用户什么也没收到」，最难排查的一类线上问题。
+        """
+        self.OTP_SENDER = self.OTP_SENDER.strip().lower()
+        self.OTP_EMAIL_SENDER = self.OTP_EMAIL_SENDER.strip().lower()
+        self.OTP_SMS_SENDER = self.OTP_SMS_SENDER.strip().lower()
+
+        if self.OTP_SENDER not in ("console", "smtp", "webhook"):
+            raise ValueError(
+                f"OTP_SENDER 只能是 console / smtp / webhook，当前为 {self.OTP_SENDER!r}"
+            )
+        # 各渠道可选范围不同：smtp 只能发邮件（短信渠道的 target 是号码，没有邮件语义）；
+        # webhook 是「把一段报文 POST 给网关」的通用形态，用来发短信。
+        for field, value, allowed in (
+            ("OTP_EMAIL_SENDER", self.OTP_EMAIL_SENDER, ("console", "smtp")),
+            ("OTP_SMS_SENDER", self.OTP_SMS_SENDER, ("console", "webhook")),
+        ):
+            if value and value not in allowed:
+                raise ValueError(
+                    f"{field} 只能是 {' / '.join(allowed)} 或留空（跟随 OTP_SENDER），当前为 {value!r}"
+                )
+
+        email_kind = self.OTP_EMAIL_SENDER or self.OTP_SENDER
+        sms_kind = self.OTP_SMS_SENDER or self.OTP_SENDER
+        # 全局值 + 单渠道未覆盖时可能配出「邮件走 webhook / 短信走 smtp」这种无意义组合
+        if email_kind == "webhook":
+            raise ValueError("邮件渠道不支持 webhook：请显式设置 OTP_EMAIL_SENDER=smtp 或 console")
+        if sms_kind == "smtp":
+            raise ValueError("短信渠道不支持 smtp：请显式设置 OTP_SMS_SENDER=webhook 或 console")
+
+        if "smtp" in (email_kind, sms_kind):
+            if not self.SMTP_HOST.strip():
+                raise ValueError("配置了 smtp 发送器但 SMTP_HOST 为空")
+            if not (self.SMTP_FROM.strip() or self.SMTP_USER.strip()):
+                raise ValueError("配置了 smtp 发送器但 SMTP_FROM / SMTP_USER 均为空（发件人必填）")
+            if self.SMTP_USE_SSL and self.SMTP_STARTTLS:
+                raise ValueError("SMTP_USE_SSL 与 SMTP_STARTTLS 互斥（465 用 SSL，587 用 STARTTLS）")
+
+        if sms_kind == "webhook":
+            if not self.SMS_WEBHOOK_URL.strip():
+                raise ValueError("配置了 webhook 短信发送器但 SMS_WEBHOOK_URL 为空")
+            if not self.SMS_WEBHOOK_URL.startswith(("http://", "https://")):
+                raise ValueError("SMS_WEBHOOK_URL 必须以 http:// 或 https:// 开头")
+            self.SMS_WEBHOOK_METHOD = self.SMS_WEBHOOK_METHOD.strip().upper()
+            if self.SMS_WEBHOOK_METHOD not in ("POST", "GET"):
+                raise ValueError("SMS_WEBHOOK_METHOD 只能是 POST 或 GET")
+            if "{code}" not in self.SMS_WEBHOOK_BODY:
+                # 少了 {code} 的话接口照样返回 200、用户照样收不到码，只能靠启动拦住
+                raise ValueError("SMS_WEBHOOK_BODY 必须包含 {code} 占位符")
+            if self.SMS_WEBHOOK_HEADERS.strip():
+                try:
+                    parsed = json.loads(self.SMS_WEBHOOK_HEADERS)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"SMS_WEBHOOK_HEADERS 不是合法 JSON：{exc}") from exc
+                if not isinstance(parsed, dict):
+                    # 非对象（数组 / 字符串）会在真正发送时炸在 headers.update 上——
+                    # 那是「第一次发短信才失败」，正是这里要提前拦住的
+                    raise ValueError("SMS_WEBHOOK_HEADERS 必须是 JSON 对象，例如 {\"Authorization\":\"Bearer xxx\"}")
+
+        # 生产（非 debug）下仍用 console：验证码只打进服务端日志、用户永远收不到，
+        # 且任何能看日志的人都能完成任意账号的验证——等同于验证形同虚设。
+        if (
+            not self.DEBUG
+            and not self.OTP_ALLOW_CONSOLE_IN_PROD
+            and "console" in (email_kind, sms_kind)
+        ):
+            raise ValueError(
+                "生产环境必须配置真实发送器：OTP_SENDER / OTP_EMAIL_SENDER / OTP_SMS_SENDER "
+                "不能有渠道落到 console（验证码只进日志，用户收不到且日志可见即可冒用）；"
+                "若确为端到端验收，请显式设置 OTP_ALLOW_CONSOLE_IN_PROD=true"
+            )
         return self
 
     @property
