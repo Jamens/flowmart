@@ -545,6 +545,7 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 | Redis 不映射宿主端口 | 限流计数只在 compose 网络内用，避免与本机已装的 Redis（6379）冲突；想用本机 Redis 就把 `LOGIN_RATE_LIMIT_REDIS_URL` 改成 `redis://host.docker.internal:6379/0` |
 | 镜像内以非 root 运行 | 即便容器被攻破，拿到的也只是低权限用户 |
 | 验证码投递**不给可用默认值** | compose 里 `SMTP_HOST` / `SMS_WEBHOOK_URL` 默认为空，没配好就起不来（启动校验直接拦下）。给个占位地址让容器正常起来、用户却永远收不到码，比起不来更糟——那种故障要到「用户注册到一半」才被发现 |
+| TLS 在 LB / 反向代理层终结，镜像内不挂证书、不用 nginx | 生产要求 `COOKIE_SECURE=True`（HTTPS），但 TLS 交给基础设施（云 ALB / Cloudflare / 轻量反代如 Caddy）终结，镜像只跑 8000 裸 HTTP；既满足 HTTPS，又守住「不用 nginx」的取舍，证书续期也由基础设施统一管 |
 
 ### Redis 与限流
 
@@ -570,6 +571,43 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 
 > 本地用 HTTP 调试时若浏览器不接受 Secure Cookie，可临时 `DEBUG=true`，
 > 但那会**同时跳过上述全部校验**，仅限开发。
+
+### 生产 TLS：在负载均衡 / 反向代理层终结
+
+镜像里 `uvicorn` 只跑 `0.0.0.0:8000` 的**裸 HTTP**（刻意不在容器内终结 TLS，也**不用 nginx**）。
+但生产要求 `COOKIE_SECURE=True`（HTTPS），所以 HTTPS 必须在镜像**之外**的一层终结，再转发
+HTTP 给容器：
+
+- **云负载均衡 / CDN**（云 ALB、Cloudflare 等）：在 LB 上挂证书、对外 443，回源用 HTTP 打到容器 8000。
+  这类托管服务会顺手做好证书续期、HTTP→HTTPS 重定向、健康检查。
+- **自托管轻量反代**（不想引入 nginx 时，用 Caddy 等）：由它监听 443 终结 TLS，反代到 `:8000`。
+
+无论哪种，容器本身始终保持 HTTP，配置上只需告诉应用「前面有人替我终结了 TLS、并诚实转发了
+客户端真实信息」：
+
+| 变量 | 生产取值 | 作用 |
+| --- | --- | --- |
+| `PUBLIC_BASE_URL` | `https://shop.example.com` | 站点公网基址（含 https）；支付回调地址、HTTPS 跳转目标都回退到它，域名只配一次 |
+| `PAYMENT_NOTIFY_BASE_URL` | `https://shop.example.com` | 支付/退款回调必须 https，留空则回退 `PUBLIC_BASE_URL` |
+| `TRUST_PROXY` | `True` | 信任 LB/反代写来的 `X-Forwarded-For` / `X-Forwarded-Proto`，应用据此判断真实客户端 IP 与协议（限流、HTTPS 判定都依赖它） |
+| `COOKIE_SECURE` | `True` | 生产强制（启动已校验），HttpOnly Cookie 仅经 HTTPS 下发 |
+| `ENFORCE_HTTPS` | 可选 `True` | 应用层再 307 跳 http→https；**必须同时 `TRUST_PROXY=True`**，否则反代转发的 http 会被无限重定向。多数 LB 自己已做重定向，这层可不开 |
+| `COOKIE_DOMAIN` | 子域分流时设 `.example.com` | 前后端分处不同子域时让令牌 Cookie 跨子域生效；同源部署留空即可 |
+
+> **健康检查**：LB 通常用 HTTP 探活，`/health` 刻意**不参与 HTTPS 跳转**，探活直接打
+> `http://<容器>:8000/health` 即可，不会被 307 绊住。
+
+自托管（Caddy）的最小反代示例（非 nginx，契合「不用 nginx」取舍）：
+
+```caddyfile
+shop.example.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+证书由 Caddy 自动申请（ACME）与续期，无需手动管理。换成云 LB 时这段直接删掉、改为在控制台挂证书——
+应用侧配置完全不变。
 
 ### CI
 
@@ -662,4 +700,5 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 下单幂等（`idempotency_key`）：防重复提交（双击 / 网络重试 / 弱网卡顿）导致**重复建单 + 重复扣库存**。`Order` 新增全局唯一 `idempotency_key` 列（含 Alembic 迁移），`OrderService.create_order` 接受可选 `idempotency_key`：① 入库前按 `(key, user_id)` 预查，命中即返回已有订单、不重复扣库存不重复启动流程；② 并发竞态下若两条都越过预查，后插入者触发唯一约束冲突（`IntegrityError`），在 `flush` 处捕获后回滚本次扣库存并返回已存在的订单，最终**只建一单、库存只扣一次**；③ 不传 key 或不同 key 各自新建，向后兼容。`POST /api/v1/orders` 的 `OrderCreateIn` 透传该字段并在响应中回显。NULL 列不触发唯一约束冲突（SQLite/PostgreSQL 同语义），旧订单 / 不传 key 的调用方零影响
 - [x] 支付回调加固：① **未知 `out_trade_no` → 回成功停止重发**：验签通过且渠道声明支付成功、却查不到对应流水时，原实现回 404 会让微信/支付宝按 15s 阶梯反复重发数小时（纯浪费请求量、还淹没对账噪声）；改为回渠道成功响应让重发立即停止，同时打 `warning` 日志供按 `provider_trade_no` 对账排查（绝不为「凑响应」凭空建单，否则违反「钱到账才推进」铁律）。② **回调入口按 IP 限流**：`/payments/notify/{channel}` 在「验签」之前就套 `rate_limit("payment_callback")`，阈值 `RATE_LIMIT_PAYMENT_CALLBACK_MAX`（默认 60/窗口，可按大促调大、设 0 关闭）；验签是 RSA/AES-GCM 这类 CPU 密集操作，不挡住的话伪造签名的洪水请求就是现成的 CPU 放大 DoS。复用既有 `RateLimitStore`（内存/Redis 可切），IP 取值与全局 `TRUST_PROXY` 一致，避免与登录限流对「客户端是谁」判断不一致而被绕过
 - [x] 退款接真实渠道 API：`refund` 事件（大额转人工审核 `refunding`、小额自动关单 `closed`）现在真正把钱退回去，而不是只改本地状态。`PaymentProvider` 新增 `refund()` 抽象方法，三家渠道各自实现：`MockPaymentProvider` 直接回成功；`WechatPayProvider` 走 APIv3 退款接口（`/v3/refund/domestic/transactions/refunds`，用 `transaction_id`=渠道交易号、`out_refund_no` 幂等、APIv3 签名）；`AlipayProvider` 走 `alipay.trade.refund`（RSA2 签名，**且验签响应用支付宝公钥**防伪造「退款成功」）。失败路径：`_effect_mark_refunded` 先调渠道、成功才把流水标记 `refunded`；渠道抛 `PaymentError`（网络/渠道拒绝/验签不过）则整笔回滚（订单回到 `paid`、`refund` 仍可重试），`fire_event` 转 502，绝不会出现「钱没退、订单却关了」。流水新增 `out_refund_no`（我方幂等单号，重试复用）/ `refund_channel_no`（渠道退款单号）两列供对账，含 Alembic 迁移。测试 `test_refund_channel.py` 覆盖 mock 端到端、微信/支付宝签名请求+解析响应、渠道失败保持订单 paid、以及 `out_refund_no` 幂等复用
+- [x] 生产 TLS 在负载均衡 / 反向代理层终结（零代码改动）：镜像内始终跑裸 HTTP 8000 端口、不挂证书、不内置 nginx；TLS 解密交给云 LB（ALB/CLB）/ Cloudflare / Caddy 反代，反向代理 `127.0.0.1:8000` 即可。配套把所有「协议从哪来」的判定收敛到一个事实来源：`PUBLIC_BASE_URL`（支付回调地址留空时回退它）、`TRUST_PROXY`（信任 `X-Forwarded-Proto` 判定真实协议）、`ENFORCE_HTTPS`（强制跳转 + `Strict-Transport-Security`）、`COOKIE_SECURE`（Secure 标记）、`COOKIE_DOMAIN`（前后端分域部署）。`DEPLOY_ENV` 进 `/health`、配错即启动报错。已附 Caddy `reverse_proxy 127.0.0.1:8000` 样例与逐项环境变量说明，刻意不在仓库里放证书也不引入 nginx 依赖
 - [x] 测试（pytest 全量 338 passed；前端 Vitest 13 条）
