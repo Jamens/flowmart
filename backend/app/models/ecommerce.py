@@ -220,7 +220,7 @@ class Payment(TimestampMixin, Base):
     provider_trade_no: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )
-    # pending=待支付, success=已支付, failed=失败, refunded=已退款
+    # pending=待支付, success=已支付, failed=失败, refunded=已退款, expired=超时未支付自动取消
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     paid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 

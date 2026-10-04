@@ -206,6 +206,10 @@ class Settings(BaseSettings):
     ALIPAY_SIGN_TYPE: str = "RSA2"
     ALIPAY_GATEWAY: str = "https://openapi.alipay.com/gateway.do"
 
+    # 待付款订单超时时长（分钟）：超过该时长的待付款订单会被 expire_unpaid_orders
+    # 脚本自动取消并归还库存，避免库存被永久占用（资源泄漏）。<=0 表示不启用超时。
+    ORDER_PAY_TIMEOUT_MINUTES: int = 30
+
     # MySQL 连接
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306

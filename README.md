@@ -624,7 +624,7 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 分类（两级树；删除前应用层校验商品/子分类引用，防间接环）
 - [x] 前端管理后台（订单管理页、流程设计器、登录页）
 - [x] 新建订单可选收货地址（OrdersView 弹窗下拉复用 `/users/{id}/addresses`，按令牌归属拉取；选中才传 `address_id` 补全订单 `address_snapshot`，不选中则订单无快照）+ 后端 `create_order` 地址归属校验防 IDOR（他人 `address_id` 与「不存在」同等处理，统一 404 不泄露是否存在）
-- [x] 工具脚本（init_db / seed / export_schema / export_data_html / cleanup_refresh_tokens 定期清理 / cleanup_uploads 孤儿图片清理）
+- [x] 工具脚本（init_db / seed / export_schema / export_data_html / cleanup_refresh_tokens 定期清理 / cleanup_uploads 孤儿图片清理 / expire_unpaid_orders 超时未支付自动取消并归还库存）
 - [x] MySQL 8.0.45 实跑验证（建表 / 种子 / 下单 / 流转 / 购物车 / 设计器全链路；方言差异已处理）
 - [x] 购物车前端页面（`CartView.vue`：选 SKU 加购、改数量、移除、合计、选地址结算；数量改动受控渲染，失败回滚到后端真实值）
 - [x] 商品管理页面（`ProductsView.vue`：搜索 / 状态筛选含下架、SKU 展开明细、上架下架、新建商品含动态 SKU 行）
@@ -658,4 +658,5 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 通知渠道可配置（`OTP_SENDER` 全局 + `OTP_EMAIL_SENDER` / `OTP_SMS_SENDER` 分渠道：邮件走标准库 `smtplib` **零新增依赖**、短信走**通用 HTTP 网关**（`{target}/{code}/{ttl}` 占位符模板，可指向厂商也可指向自建转发服务），刻意**不内置任何厂商 SDK**——开源项目不替使用者选厂商；默认 `console` 保证 clone 下来**零凭据**可跑通注册验证，但生产启动校验拒绝任何渠道落到 console；外呼一律带超时，发送失败整段回滚不占重发配额，上游异常统一收敛为 502）
 - [x] 域名 / 部署环境 / TLS 可配置（`PUBLIC_BASE_URL` 单一事实来源：支付回调地址留空时回退到它，域名只配一次；`DEPLOY_ENV` 标签进 `/health` 且与 `DEBUG` 强一致；`COOKIE_DOMAIN` 支持前后端分域部署；全局 `TRUST_PROXY` 信任 `X-Forwarded-For/Proto`，限流同时跟随该开关；`ENFORCE_HTTPS` 强制跳转 + `HSTS_MAX_AGE` 发 `Strict-Transport-Security`，两者均配错即启动报错，且协议判定区分直连与反代避免被伪造 `X-Forwarded-Proto` 骗过）
 - [x] 支付资金漏洞修复（手动 `pay` 闸门）：`POST /orders/{id}/actions/pay` 在非 mock 渠道下强制 403——管理员在订单抽屉里点「支付」也标不了已付款（堵住「0 元提货」）；`pay` 只由渠道异步回调以 `system:payment-callback` 身份触发。同时 `available_events` 在非 mock 渠道下剔除 `pay`，前端抽屉不再渲染「手动支付」按钮（mock 渠道保留以便调试）。真实支付链路（`create_payment` 发起 / `payment_notify` 回调）不受影响，二者走独立路径、不经该手动接口
-- [x] 测试（pytest 全量 320 passed；前端 Vitest 13 条）
+- [x] 待付款订单超时回收（库存防泄漏）：新增 `scripts/expire_unpaid_orders.py`，周期（cron）取消超过 `ORDER_PAY_TIMEOUT_MINUTES`（默认 30）分钟仍未支付的订单并原子归还库存，未支付流水标记 `expired` 避免对账把死流水当待支付。工作流引擎无定时事件能力，本脚本即「外部定时器」；只筛 `pending_payment` 且到点未付的订单，已取消/已支付自然不在范围，故**天然幂等**。配置 `ORDER_PAY_TIMEOUT_MINUTES<=0` 表示不启用。`--dry-run` 可预演
+- [x] 测试（pytest 全量 325 passed；前端 Vitest 13 条）
