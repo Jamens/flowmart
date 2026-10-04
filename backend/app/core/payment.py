@@ -53,6 +53,14 @@ class CallbackResult:
     success: bool  # 渠道侧是否真的支付成功
 
 
+@dataclass
+class RefundResult:
+    """渠道退款结果。refund_id 为渠道侧退款单号（或我方 out_refund_no），供对账。"""
+
+    refund_id: str
+    success: bool
+
+
 class PaymentProvider(ABC):
     """渠道适配器接口。新增渠道只需实现这三个方法并注册到 build_payment_provider。"""
 
@@ -71,6 +79,24 @@ class PaymentProvider(ABC):
     def callback_success_response(self) -> tuple[str, str]:
         """回调成功时应回的内容类型与正文。渠道靠它判断「我们收到了」。"""
         return "application/json", '{"code":"SUCCESS"}'
+
+    @abstractmethod
+    def refund(
+        self,
+        *,
+        out_trade_no: str,
+        provider_trade_no: str,
+        amount: Decimal,
+        reason: str,
+        out_refund_no: str,
+    ) -> RefundResult:
+        """发起退款。成功返回渠道退款单号；失败抛 PaymentError（网络/渠道拒绝）。
+
+        out_trade_no 为我方支付流水号（payments.pay_no），provider_trade_no 为渠道交易号，
+        out_refund_no 为我方退款单号（需全局唯一、且重试复用以保证渠道侧幂等）。
+        本模块只负责「把退款请求翻译成渠道协议」，写流水/推进订单是调用方（api/payments.py）的事。
+        """
+        raise NotImplementedError
 
 
 class MockPaymentProvider(PaymentProvider):
@@ -92,6 +118,19 @@ class MockPaymentProvider(PaymentProvider):
 
     def parse_callback(self, *, headers, body) -> CallbackResult:
         raise PaymentError("mock 渠道不接受真实回调（它是发起即成功的同步模拟）")
+
+    def refund(
+        self,
+        *,
+        out_trade_no: str,
+        provider_trade_no: str,
+        amount: Decimal,
+        reason: str,
+        out_refund_no: str,
+    ) -> RefundResult:
+        # 演示渠道：不接真实网关，直接返回成功。把 out_refund_no 当作渠道退款单号回传，
+        # 这样对账展示时能看到「我方发起的退款号」被渠道确认受理——与真实渠道的语义一致。
+        return RefundResult(refund_id=out_refund_no, success=True)
 
 
 def _load_private_key(path: str):
@@ -236,6 +275,55 @@ class WechatPayProvider(PaymentProvider):
     def callback_success_response(self) -> tuple[str, str]:
         return "application/json", '{"code":"SUCCESS","message":"成功"}'
 
+    def refund(
+        self,
+        *,
+        out_trade_no: str,
+        provider_trade_no: str,
+        amount: Decimal,
+        reason: str,
+        out_refund_no: str,
+    ) -> RefundResult:
+        """发起退款（APIv3 退款接口）。
+
+        微信退款以**渠道交易号**为准（回调里拿到的 transaction_id），这里用 provider_trade_no；
+        若为空说明没有真实渠道交易（如测试桩），请求会因缺 transaction_id 被微信拒绝——属于
+        配置/数据缺失，按 PaymentError 抛出而非静默成功。
+        """
+        import httpx
+
+        url_path = "/v3/refund/domestic/transactions/refunds"
+        # 微信 reason 限制 80 字，超长截断避免请求被拒
+        payload = {
+            "transaction_id": provider_trade_no,
+            "out_refund_no": out_refund_no,
+            "reason": reason[:80],
+            "amount": {
+                "refund": int(amount * 100),  # 微信按分
+                "total": int(amount * 100),
+                "currency": "CNY",
+            },
+        }
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        try:
+            resp = httpx.post(
+                self.GATEWAY + url_path,
+                content=body,
+                headers={
+                    "Authorization": self._authorization("POST", url_path, body),
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "flowmart",
+                },
+                timeout=10,
+            )
+        except Exception as exc:  # 网络层异常不应以 500 形态泄漏到用户
+            raise PaymentError(f"调用微信退款失败：{exc}") from exc
+        if resp.status_code != 200:
+            raise PaymentError(f"微信退款失败（HTTP {resp.status_code}）：{resp.text}")
+        # 微信退款响应是明文 JSON（不含 resource 加密），refund_id 即渠道退款单号
+        return RefundResult(refund_id=resp.json().get("refund_id", ""), success=True)
+
 
 class AlipayProvider(PaymentProvider):
     """支付宝电脑网站支付（alipay.trade.page.pay）。
@@ -319,6 +407,84 @@ class AlipayProvider(PaymentProvider):
     def callback_success_response(self) -> tuple[str, str]:
         # 支付宝只认这个单词，返回别的它会持续重发通知
         return "text/plain", "success"
+
+    def refund(
+        self,
+        *,
+        out_trade_no: str,
+        provider_trade_no: str,
+        amount: Decimal,
+        reason: str,
+        out_refund_no: str,
+    ) -> RefundResult:
+        """发起退款（alipay.trade.refund）。
+
+        out_trade_no 为我方支付流水号（payments.pay_no），trade_no 为渠道交易号
+        （provider_trade_no）。out_request_no 用我方 out_refund_no 充当重试幂等键。
+        """
+        import httpx
+
+        biz = {
+            "out_trade_no": out_trade_no,
+            "trade_no": provider_trade_no,
+            "refund_amount": f"{amount:.2f}",  # 支付宝按元、两位小数字符串
+            "refund_reason": reason[:256],
+            "out_request_no": out_refund_no,
+        }
+        params = {
+            "app_id": settings.ALIPAY_APPID,
+            "method": "alipay.trade.refund",
+            "format": "JSON",
+            "charset": "utf-8",
+            "sign_type": settings.ALIPAY_SIGN_TYPE,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "version": "1.0",
+            "biz_content": json.dumps(biz, separators=(",", ":"), ensure_ascii=False),
+        }
+        params["sign"] = self._sign(params)
+        try:
+            resp = httpx.post(settings.ALIPAY_GATEWAY, data=params, timeout=10)
+        except Exception as exc:  # 网络层异常不应以 500 形态泄漏到用户
+            raise PaymentError(f"调用支付宝退款失败：{exc}") from exc
+        try:
+            data = resp.json()
+        except Exception as exc:
+            raise PaymentError(f"支付宝退款响应解析失败：{exc}") from exc
+        inner = data.get("alipay_trade_refund_response") or {}
+        if inner.get("code") != "10000":
+            # 业务失败（如交易状态不允许退款）：明确报错，绝不假装成功
+            raise PaymentError(
+                f"支付宝退款被拒绝（code={inner.get('code')}）："
+                f"{inner.get('sub_msg') or inner.get('msg')}"
+            )
+        # 验签：响应里的 sign 是对 alipay_trade_refund_response 原文做的 RSA2 签名，
+        # 不验签就采信等于把「退款是否成功」交给任意能伪造响应的人。
+        self._verify_response(data)
+        # 退款成功：渠道侧退款单号即 trade_no，供对账（取不到时回退到 out_refund_no）
+        return RefundResult(
+            refund_id=inner.get("trade_no") or inner.get("out_trade_no") or out_refund_no,
+            success=True,
+        )
+
+    def _verify_response(self, data: dict[str, Any]) -> None:
+        """校验支付宝网关响应的签名（验签不过直接报错）。
+
+        与 parse_callback 共用同一把支付宝公钥（ALIPAY_PUBLIC_KEY_PATH）。
+        响应签名是对 `alipay_trade_refund_response` 节点原文字符串做的 RSA2 签名。
+        """
+        sign = data.get("sign", "")
+        inner = data.get("alipay_trade_refund_response")
+        if not sign or inner is None:
+            raise PaymentError("支付宝退款响应缺少签名或业务节点")
+        try:
+            raw = json.dumps(inner, separators=(",", ":"), ensure_ascii=False)
+            self._alipay_key.verify(
+                base64.b64decode(sign), raw.encode(), padding.PKCS1v15(), hashes.SHA256()
+            )
+        except InvalidSignature as exc:
+            raise PaymentError("支付宝退款响应验签失败，疑似伪造") from exc
+        except Exception as exc:
+            raise PaymentError(f"支付宝退款响应验签异常：{exc}") from exc
 
 
 _PROVIDER: PaymentProvider | None = None

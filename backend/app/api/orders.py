@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.pagination import apply_pagination, total_count
+from app.core.payment import PaymentError
 from app.core.ratelimit import rate_limit_user
 from app.core.security import get_current_user, require_verified_contact
 from app.models.ecommerce import Order, OrderItem, User
@@ -259,6 +260,11 @@ def fire_event(
     try:
         # 事件名直接透传给服务层，新增流程事件无需改动 API 代码
         order = svc.trigger(order.id, event, operator, payload.comment)
+    except PaymentError as exc:
+        # 退款等事件会调用真实支付渠道；渠道调用失败（网络/渠道拒绝）不能把订单
+        # 标成已退款——回滚并明确告知上游「渠道侧失败」，便于运营重试或换渠道。
+        db.rollback()
+        raise HTTPException(status_code=502, detail=f"退款渠道调用失败：{exc}") from exc
     except (WorkflowError, ValueError) as exc:
         # 非法流转、参数不合法属于调用方问题 -> 400
         raise HTTPException(status_code=400, detail=str(exc)) from exc

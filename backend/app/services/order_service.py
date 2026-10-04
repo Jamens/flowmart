@@ -9,6 +9,7 @@
 
 这样在流程设计器里新增审批、驳回等事件时，后端代码一行都不用改。
 """
+import logging
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -26,6 +27,8 @@ from app.models.ecommerce import (
 )
 from app.models.workflow import WorkflowInstance
 from app.services.workflow_engine import WorkflowEngine, WorkflowError
+
+logger = logging.getLogger(__name__)
 
 ORDER_FLOW_CODE = "order_flow"
 
@@ -48,7 +51,7 @@ def sync_order_status(order: Order, instance: WorkflowInstance) -> None:
 
 # ---------------- 副作用：与社会性无关的数据库操作 ----------------
 
-def _effect_create_payment(svc: "OrderService", order: Order) -> None:
+def _effect_create_payment(svc: "OrderService", order: Order, **_kw) -> None:
     """支付成功：记录支付流水。
 
     **必须幂等**。真实渠道路径下，「发起支付」那一步已写好一条 pending 流水，
@@ -93,7 +96,7 @@ def _effect_create_payment(svc: "OrderService", order: Order) -> None:
     order.paid_at = payment.paid_at
 
 
-def _effect_return_stock(svc: "OrderService", order: Order) -> None:
+def _effect_return_stock(svc: "OrderService", order: Order, **_kw) -> None:
     """归还库存：取消与退款都必须调用，否则库存会凭空消失。
 
     用原子 UPDATE ... SET stock = stock + qty 完成，避免「先读到内存再加回去」的
@@ -108,8 +111,17 @@ def _effect_return_stock(svc: "OrderService", order: Order) -> None:
         )
 
 
-def _effect_mark_refunded(svc: "OrderService", order: Order) -> None:
-    """退款：在原支付流水上标记已退款。"""
+def _effect_mark_refunded(svc: "OrderService", order: Order, *, comment: str = "") -> None:
+    """退款：先调用支付渠道把钱退回去，再在原支付流水上标记已退款。
+
+    顺序与资金安全铁律一致：**先确认钱真退了（渠道返回成功），再改本地状态**。
+    渠道调用失败则抛错，让 trigger 整体回滚——订单回到 paid、refund 事件仍可重试，
+    绝不会出现「钱没退、订单却关了」这种两头空的事故。
+
+    已知边界（开源版不做、真实部署需对账/幂等账本兜底）：若渠道已实际退款但响应
+    在中途丢失（网络/超时），本机会回滚、重试时用新的 RF 单号再次发起——极端情况下
+    可能二次退款。渠道侧用 out_refund_no 幂等可缓解，但并非绝对保证。
+    """
     _effect_return_stock(svc, order)
     payment = (
         svc.db.execute(
@@ -120,11 +132,37 @@ def _effect_mark_refunded(svc: "OrderService", order: Order) -> None:
         .scalars()
         .first()
     )
-    if payment:
-        payment.status = "refunded"
+    if payment is None:
+        return
+
+    from app.core.payment import PaymentError, get_payment_provider
+
+    # 复用已有 out_refund_no（重试幂等），否则生成新的。先记到对象上，
+    # 即便本次渠道调用失败、整笔回滚，下次重试仍会走「无 out_refund_no → 生成新号」，
+    # 由渠道侧拿 out_refund_no 做幂等兜底。
+    out_refund_no = payment.out_refund_no or _gen_no("RF")
+    payment.out_refund_no = out_refund_no
+    provider = get_payment_provider()
+    try:
+        result = provider.refund(
+            out_trade_no=payment.pay_no,
+            provider_trade_no=payment.provider_trade_no or "",
+            amount=payment.amount,
+            reason=(comment or "用户申请退款")[:80],
+            out_refund_no=out_refund_no,
+        )
+    except PaymentError as exc:
+        logger.warning(
+            "退款渠道调用失败 order=%s pay_no=%s out_refund_no=%s: %s",
+            order.id, payment.pay_no, out_refund_no, exc,
+        )
+        # 不标记已退款、不吞异常：trigger 会在 commit 前抛错，整笔回滚
+        raise
+    payment.refund_channel_no = result.refund_id
+    payment.status = "refunded"
 
 
-def _effect_mark_shipped(svc: "OrderService", order: Order) -> None:
+def _effect_mark_shipped(svc: "OrderService", order: Order, **_kw) -> None:
     order.shipped_at = datetime.now()
 
 
@@ -377,7 +415,8 @@ class OrderService:
         # 先推进、后跑副作用，失败路径上副作用根本没发生过，不依赖回滚。
         effect = SIDE_EFFECTS.get(event)
         if effect:
-            effect(self, order)
+            # comment 透传给副作用（如退款要带上退款理由），其余事件忽略该参数
+            effect(self, order, comment=comment)
 
         sync_order_status(order, instance)
         self.db.commit()

@@ -230,6 +230,17 @@ class Payment(TimestampMixin, Base):
     # pending=待支付, success=已支付, failed=失败, refunded=已退款, expired=超时未支付自动取消
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     paid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # 我方退款单号（RF...）：渠道侧幂等键。重试退款必须复用同一单号，否则渠道会报
+    # 「退款单号重复」或（更糟）重复退款。先有单号再调渠道，重试天然幂等。
+    # 留空表示尚未发起过退款。
+    out_refund_no: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, unique=True, index=True, default=None
+    )
+    # 渠道退款单号（微信 refund_id / 支付宝 trade_no）：退款成功后的对账凭证。
+    # 留空表示退款尚未成功（或 mock 渠道下与 out_refund_no 取同一值）。
+    refund_channel_no: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True, default=None
+    )
 
 
 class VerificationCode(TimestampMixin, Base):
