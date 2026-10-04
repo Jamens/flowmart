@@ -78,7 +78,7 @@ def _setup_wechat(monkeypatch, tmp_path):
     platform_key, _, _ = _gen_rsa(tmp_path, "wxplat")
     cert = _self_signed_cert(tmp_path, platform_key)
     _, mch_priv, _ = _gen_rsa(tmp_path, "wxmch")
-    api_key = "0" * 32  # APIv3 密钥必须 32 字节
+    api_key = "k" * 32  # APIv3 密钥必须 32 字节（占位假值，勿误当真实凭据）
     monkeypatch.setattr(settings, "PAYMENT_PROVIDER", "wechat")
     monkeypatch.setattr(settings, "WECHAT_APPID", "wxapp")
     monkeypatch.setattr(settings, "WECHAT_MCHID", "1234567890")
