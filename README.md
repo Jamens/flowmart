@@ -267,7 +267,7 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
 - **支付宝用电脑网站支付**（`alipay.trade.page.pay`），前端拿到跳转 URL。只有**异步通知**
   才是可靠的到账依据（同步跳转可被拦截或伪造），推进订单只看异步回调。
 
-**三条铁律**（这段是资金安全，不是代码风格）：
+**四条铁律**（这段是资金安全，不是代码风格）：
 
 1. **`pay` 事件绝不进 `BUYER_ALLOWED_EVENTS`** —— 那等于允许买家自己把订单标记成已付款
    而不真付钱（0 元提货）。推进只能由渠道回调以 `system:payment-callback` 身份触发，
@@ -275,6 +275,11 @@ MIG_TEST_URL="mysql+pymysql://root:密码@127.0.0.1:3390/flowmart_mig" \
 2. **回调必须验签后才可信**。未验签就采信，等于任何人 POST 一下就能把订单改成已支付。
    微信走 RSA-SHA256 + `resource` 的 AES-GCM 解密，支付宝走 RSA2。
 3. **回调必须幂等**。渠道收不到成功响应会阶梯重发数小时，不幂等就会重复推进、重复记流水。
+4. **手动动作接口绝不推进 `pay`** —— `POST /orders/{id}/actions/pay` 在非 mock 渠道下
+   一律 403，哪怕管理员在订单抽屉里点「支付」也只会被拒，钱没到账就不能把订单
+   标成已付款（0 元提货）。`pay` 只由渠道异步回调（验签后）以 `system:payment-callback`
+   身份触发；mock 渠道为演示/联调保留手动推进。前端 `available_events` 在非 mock 渠道下
+   也会剔除 `pay`，抽屉不再渲染「手动支付」按钮。
 
 回调其余两道防线：**金额比对**（与应收不符一律拒绝——少了说明被篡改，多了说明渠道侧配错，
 都不能默默放行）、**找不到流水不凭空建单**。
@@ -652,4 +657,5 @@ docker compose run --rm backend python scripts/seed.py      # 灌演示数据（
 - [x] 前端支付入口（订单页「去支付」**仅本人待付款订单**可见——管理员可见全站订单但替付会被后端 404 拒绝；点击走 `/payments` 而非 `actions/pay`，后者买家必然 403；微信渲染二维码、支付宝跳收银台，两者均**轮询订单状态**等待渠道异步回调，上限约 2 分钟与二维码有效期同量级；二维码库 `qrcode` 用**动态 import** 拆为独立 chunk，非微信渠道不加载——这是本项目第一个前端新增依赖，理由是微信扫码属硬功能需求）
 - [x] 通知渠道可配置（`OTP_SENDER` 全局 + `OTP_EMAIL_SENDER` / `OTP_SMS_SENDER` 分渠道：邮件走标准库 `smtplib` **零新增依赖**、短信走**通用 HTTP 网关**（`{target}/{code}/{ttl}` 占位符模板，可指向厂商也可指向自建转发服务），刻意**不内置任何厂商 SDK**——开源项目不替使用者选厂商；默认 `console` 保证 clone 下来**零凭据**可跑通注册验证，但生产启动校验拒绝任何渠道落到 console；外呼一律带超时，发送失败整段回滚不占重发配额，上游异常统一收敛为 502）
 - [x] 域名 / 部署环境 / TLS 可配置（`PUBLIC_BASE_URL` 单一事实来源：支付回调地址留空时回退到它，域名只配一次；`DEPLOY_ENV` 标签进 `/health` 且与 `DEBUG` 强一致；`COOKIE_DOMAIN` 支持前后端分域部署；全局 `TRUST_PROXY` 信任 `X-Forwarded-For/Proto`，限流同时跟随该开关；`ENFORCE_HTTPS` 强制跳转 + `HSTS_MAX_AGE` 发 `Strict-Transport-Security`，两者均配错即启动报错，且协议判定区分直连与反代避免被伪造 `X-Forwarded-Proto` 骗过）
-- [x] 测试（pytest 全量 315 passed；前端 Vitest 13 条）
+- [x] 支付资金漏洞修复（手动 `pay` 闸门）：`POST /orders/{id}/actions/pay` 在非 mock 渠道下强制 403——管理员在订单抽屉里点「支付」也标不了已付款（堵住「0 元提货」）；`pay` 只由渠道异步回调以 `system:payment-callback` 身份触发。同时 `available_events` 在非 mock 渠道下剔除 `pay`，前端抽屉不再渲染「手动支付」按钮（mock 渠道保留以便调试）。真实支付链路（`create_payment` 发起 / `payment_notify` 回调）不受影响，二者走独立路径、不经该手动接口
+- [x] 测试（pytest 全量 320 passed；前端 Vitest 13 条）

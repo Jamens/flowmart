@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.pagination import apply_pagination, total_count
 from app.core.ratelimit import rate_limit_user
@@ -67,6 +68,22 @@ def _safe(fn, default):
         return default
 
 
+def _manual_events(svc: OrderService, order: Order) -> list:
+    """可供前端「手动动作」按钮渲染的可用事件。
+
+    与 workflow 引擎 available_events 的唯一区别：非 mock 支付渠道下剔除 `pay`——
+    pay 只能由渠道异步回调触发，绝不能让管理员在界面上手动点一下就把订单标成已付款
+    （0 元提货漏洞）。mock 是演示/联调、无真实资金，保留 pay 以便调试。
+    """
+    events = _safe(lambda: svc.available_events(order), [])
+    if settings.PAYMENT_PROVIDER != "mock":
+        events = [
+            e for e in events
+            if (e.get("event") if isinstance(e, dict) else e) != "pay"
+        ]
+    return events
+
+
 def _serialize(order: Order, svc: OrderService) -> dict:
     """订单详情统一序列化：含明细、可触发动作、流转时间线。"""
     return {
@@ -93,7 +110,7 @@ def _serialize(order: Order, svc: OrderService) -> dict:
         ],
         # 订单可能尚未绑定流程实例或实例已丢失，此时不应让整个列表接口 500，
         # 而是降级为空列表，保证其余订单仍可正常展示
-        "available_events": _safe(lambda: svc.available_events(order), []),
+        "available_events": _manual_events(svc, order),
         "timeline": _safe(lambda: svc.get_timeline(order), []),
     }
 
@@ -210,6 +227,16 @@ def fire_event(
             raise HTTPException(status_code=404, detail="订单不存在")
         if event not in BUYER_ALLOWED_EVENTS:
             raise HTTPException(status_code=403, detail=f"买家不可执行 `{event}` 操作")
+
+    # 资金安全闸门：pay 只能由支付渠道异步回调触发（system 身份），
+    # 绝不允许经「手动动作」接口标记订单已付款。否则管理员/任意登录用户
+    # 点一下「支付」按钮，订单就变成已付款而钱根本没到账（0 元提货漏洞）。
+    # mock 渠道例外：本就是演示/联调，没有真实资金，允许手动推进便于调试。
+    if event == "pay" and settings.PAYMENT_PROVIDER != "mock":
+        raise HTTPException(
+            status_code=403,
+            detail="支付须由支付渠道异步回调触发，禁止手动标记已付款",
+        )
 
     svc = OrderService(db)
     # 先问引擎「当前能不能执行」，给出比引擎报错更友好的提示
