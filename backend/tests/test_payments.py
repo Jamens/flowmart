@@ -362,3 +362,69 @@ def test_notify_channel_mismatch_is_404(buyer_client, sku, monkeypatch, tmp_path
     """渠道与当前配置不符（如配置微信却收到 /notify/alipay）→ 不处理。"""
     _use_wechat(monkeypatch, tmp_path)
     assert buyer_client.post("/api/v1/payments/notify/alipay", content=b"x").status_code == 404
+
+
+def test_alipay_callback_unknown_out_trade_no_returns_success(buyer_client, sku, db, monkeypatch, tmp_path):
+    """验签成功但查不到对应流水：回成功**停止重发**（而非 404 让渠道死磕数小时），
+    且不凭空建单、不推进任何订单。"""
+    key = _use_alipay(monkeypatch, tmp_path)
+    order = _new_order(buyer_client, sku)
+    # 故意用一个库里不存在的 out_trade_no，但不建 pending 流水
+    body = _alipay_body(key, {
+        "out_trade_no": "PAY-NONEXISTENT",
+        "trade_no": "ALIPAY-TXN-X",
+        "total_amount": "100.00",
+        "trade_status": "TRADE_SUCCESS",
+    })
+    r = buyer_client.post(
+        "/api/v1/payments/notify/alipay",
+        content=body,
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.text == "success"
+    # 不能凭空造单：库里没有 PAY-NONEXISTENT 这条流水，原订单状态也不变
+    db.expire_all()
+    assert db.execute(
+        select(Payment).where(Payment.pay_no == "PAY-NONEXISTENT")
+    ).scalar_one_or_none() is None
+    assert db.get(Order, order["id"]).current_node_key == "pending_payment"
+
+
+def test_wechat_callback_unknown_out_trade_no_returns_success(buyer_client, sku, db, monkeypatch, tmp_path):
+    """微信侧同样：验签解密成功但 out_trade_no 查无流水 → 回成功停止重发，不建单不推进。"""
+    platform_key, api_key = _use_wechat(monkeypatch, tmp_path)
+    order = _new_order(buyer_client, sku)
+    body, headers = _wechat_body(platform_key, {
+        "out_trade_no": "PAY-WX-NONE",
+        "transaction_id": "WX-TXN-X",
+        "trade_state": "SUCCESS",
+        "amount": {"total": 10000, "currency": "CNY"},
+    }, api_key)
+    r = buyer_client.post(
+        "/api/v1/payments/notify/wechat", content=body,
+        headers={"content-type": "application/json", **headers},
+    )
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    assert db.execute(
+        select(Payment).where(Payment.pay_no == "PAY-WX-NONE")
+    ).scalar_one_or_none() is None
+    assert db.get(Order, order["id"]).current_node_key == "pending_payment"
+
+
+def test_payment_callback_rate_limited(buyer_client, sku, monkeypatch, tmp_path):
+    """支付回调入口在验签前就按 IP 限流：超过阈值直接 429，挡住伪造签名的 CPU 放大风暴。"""
+    # 配置成微信，便于用「渠道不匹配」的廉价请求压测（不触发真正的 RSA 验签，
+    # 但仍会先经过限流依赖）；验证的是「限流在验签之前、且按 IP 计」。
+    _use_wechat(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "RATE_LIMIT_PAYMENT_CALLBACK_MAX", 3)
+    url = "/api/v1/payments/notify/alipay"  # 与配置的 wechat 不匹配 → 404，但先过限流
+    codes = [
+        buyer_client.post(url, content=b"x").status_code
+        for _ in range(4)
+    ]
+    # 前 3 次放行（404），第 4 次超阈值被限流（429）
+    assert codes[:3] == [404, 404, 404], codes
+    assert codes[3] == 429
+

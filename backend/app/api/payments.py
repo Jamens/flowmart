@@ -13,6 +13,7 @@
 「订单当前能不能支付」不问硬编码的状态名，而是问引擎的 `available_events`——
 流程定义改了（比如加一道审批）这里不用跟着改。
 """
+import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -22,9 +23,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.payment import PaymentError, PaymentVerifyError, get_payment_provider
+from app.core.ratelimit import rate_limit
 from app.core.security import get_current_user
 from app.models.ecommerce import Order, Payment
 from app.services.order_service import OrderService, _gen_no
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["payments"])
 
@@ -118,7 +122,10 @@ def create_payment(
 
 @router.post("/payments/notify/{channel}")
 async def payment_notify(
-    channel: str, request: Request, db: Session = Depends(get_db)
+    channel: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit("payment_callback")),
 ):
     """渠道异步回调：验签 → 落流水 → 推进订单。
 
@@ -156,9 +163,16 @@ async def payment_notify(
         .first()
     )
     if payment is None:
-        # 找不到对应流水：可能是伪造回调（验签过了但单号是编的），
-        # 也可能是我们这边流水被清了。无论哪种都不能凭空建单，直接报错。
-        raise HTTPException(status_code=404, detail="支付流水不存在")
+        # 验签已过、且渠道声明支付成功，却查不到对应流水：可能是我方流水被清、
+        # 或极端数据不一致。两种情况下都不能「凭空建单」（那违反「钱到账才推进」铁律）；
+        # 而回 404 会让渠道按阶梯反复重发数小时，白白放大请求量、还占满对账排查的噪声。
+        # 正确做法：回成功让渠道停止重发，异常留日志供人工按 provider_trade_no 对账排查。
+        logger.warning(
+            "支付回调验签成功但找不到对应流水 out_trade_no=%r（渠道 %s）："
+            "回成功停止重发，请核对是否存在流水丢失",
+            result.out_trade_no, channel,
+        )
+        return Response(content=ok_text, media_type=media_type)
 
     if payment.status == "success":
         # 幂等：重复回调直接回成功，不再推进一次订单

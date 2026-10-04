@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_ORDER_MAX: int = 20
     # 上传按 user_id 计：每次上传都会写盘，刷上传是最直接的磁盘 DoS
     RATE_LIMIT_UPLOAD_MAX: int = 30
+    # 支付回调限流：按 **客户端 IP** 计每次请求（回调无用户身份，只能用 IP 维度）。
+    # 回调入口在「验签」之前就做限流——验签是 RSA/AES-GCM 这类 CPU 密集操作，
+    # 不挡住的话，伪造签名的洪水请求就是现成的 CPU 放大 DoS（每请求一次非对称验签）。
+    # 阈值按「单个渠道 IP 的正常重发节奏（15s 阶梯）」取宽，但足以把洪水压到 1 秒几发以内。
+    # 高并发大促商户可酌情调大；设为 0 关闭该 scope。
+    RATE_LIMIT_PAYMENT_CALLBACK_MAX: int = 60
     RATE_LIMIT_WINDOW: int = 60  # 秒
 
     # ---- 图片上传（商品封面等）----
