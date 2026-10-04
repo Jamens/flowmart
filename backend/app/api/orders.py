@@ -41,6 +41,10 @@ class OrderCreateIn(BaseModel):
     items: list[OrderItemIn] = Field(..., min_length=1)
     address_id: int | None = None
     remark: str = ""
+    # 下单幂等键：客户端每次「意图下单」生成一个，重复提交（双击/网络重试）带同一 key
+    # 即可返回已创建的订单而不重复扣库存。可不传（向后兼容）；传入则全局唯一，
+    # 长度与 orders.idempotency_key 列宽一致。
+    idempotency_key: str | None = Field(None, max_length=64)
 
 
 class ActionIn(BaseModel):
@@ -95,6 +99,7 @@ def _serialize(order: Order, svc: OrderService) -> dict:
         "status": order.status,
         "current_node_key": order.current_node_key,
         "workflow_instance_id": order.workflow_instance_id,
+        "idempotency_key": order.idempotency_key,
         "address_snapshot": order.address_snapshot,
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "items": [
@@ -199,6 +204,7 @@ def create_order(
             items=[i.model_dump() for i in payload.items],
             address_id=payload.address_id,
             remark=payload.remark,
+            idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
         # 库存不足、SKU 不存在等属于业务校验失败，用 400 而不是 500；

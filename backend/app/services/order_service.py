@@ -14,6 +14,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ecommerce import (
@@ -144,15 +145,40 @@ class OrderService:
 
     # ---------- 下单 ----------
 
+    def _find_order_by_idempotency(self, key: str, user_id: int) -> "Order | None":
+        """按下单幂等键查已有订单（同用户）。用于下单幂等：命中即返回、不重复创建。
+
+        用 (idempotency_key, user_id) 双条件：即便两个不同用户碰巧生成了相同的 key，
+        也绝不会把 A 的订单透给 B —— 但唯一约束在列上（全局），B 的重复插入仍会被
+        IntegrityError 拦下，数据不会被串改。
+        """
+        return (
+            self.db.execute(
+                select(Order).where(
+                    Order.idempotency_key == key, Order.user_id == user_id
+                )
+            )
+            .scalars()
+            .first()
+        )
+
     def create_order(
         self,
         user_id: int,
         items: list[dict],
         address_id: int | None = None,
         remark: str = "",
+        idempotency_key: str | None = None,
         auto_commit: bool = True,
     ) -> Order:
         """创建订单：校验库存 → 算钱 → 扣库存 → 启动流程 → 推进到待付款。
+
+        idempotency_key：下单幂等键。客户端每次「意图下单」生成一个，重复提交
+        （双击 / 网络重试）带同一 key 即可返回已创建的订单而不重复扣库存。
+        非空且在库中存在（同用户）→ 直接返回已有订单；并发下若两条都越过预查，
+        后插入者会触发唯一约束冲突（IntegrityError），在 flush 处捕获后回滚本次
+        库存扣减并返回已存在的订单，保证并发下也只建一单。可为空（旧订单 / 不
+        传 key 的调用方向后兼容）。
 
         auto_commit=False 时只 flush 不提交，供调用方把「下单」与别的写操作
         （如清空购物车）放进同一个事务 —— 否则会出现订单已生成、
@@ -160,6 +186,13 @@ class OrderService:
         """
         if not items:
             raise ValueError("订单不能没有商品")
+
+        # 下单幂等：同一 key（同用户）只建一单。先查已有订单直接返回，
+        # 不重复扣库存、不重复启动流程。并发碰撞的兜底见下方 flush 处的 IntegrityError。
+        if idempotency_key is not None:
+            existing = self._find_order_by_idempotency(idempotency_key, user_id)
+            if existing is not None:
+                return existing
 
         address = None
         if address_id:
@@ -255,7 +288,34 @@ class OrderService:
         )
         order.items = order_items
         self.db.add(order)
-        self.db.flush()
+        if idempotency_key is not None:
+            order.idempotency_key = idempotency_key
+        try:
+            self.db.flush()
+        except IntegrityError:
+            # 并发重复插入：另一请求已先提交同一 key 的订单。
+            # 唯一约束冲突发生在 order 这一行 flush 时（库存扣减已在本会话执行、
+            # 但还没提交）。auto_commit=True 时回滚本次事务（含上面的原子扣库存），
+            # 再查回已存在的订单返回，保证最终只建一单、库存只扣一次。
+            # auto_commit=False 由调用方掌管事务，此处不擅自回滚、直接上抛，
+            # 交由调用方处理（预查已覆盖绝大多数重复提交，此分支极少见）。
+            if auto_commit:
+                self.db.rollback()
+                # 用直查而非 _find_order_by_idempotency，使捕获逻辑独立于预查助手：
+                # 即使预查被绕过（如并发竞态或测试桩），兜底仍能正确找回已存在的订单。
+                existing = (
+                    self.db.execute(
+                        select(Order).where(
+                            Order.idempotency_key == idempotency_key,
+                            Order.user_id == user_id,
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if existing is not None:
+                    return existing
+            raise
 
         instance = self.engine.start(
             ORDER_FLOW_CODE,

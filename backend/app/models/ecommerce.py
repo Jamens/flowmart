@@ -172,6 +172,13 @@ class Order(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
     current_node_key: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     workflow_instance_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
+    # 下单幂等键：客户端每次「意图下单」生成一个，重复提交（双击/网络重试）带同一 key
+    # 即可返回已创建的订单而不重复扣库存。可为空（旧订单 / 不传 key 的调用方向后兼容）；
+    # 非空时全局唯一——并发重复插入会触发唯一约束冲突，由 OrderService.create_order 捕获后
+    # 返回已有订单，保证并发下也只建一单。
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True, default=None
+    )
     # 收货地址快照：地址被改或删除后，订单仍要能正常发货
     address_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="")
     remark: Mapped[str] = mapped_column(String(255), nullable=False, default="")
